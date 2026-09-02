@@ -28,9 +28,9 @@ import com.tencent.polaris.factory.ConfigAPIFactory;
 import com.tencent.polaris.factory.api.DiscoveryAPIFactory;
 
 import com.tencent.polaris.factory.config.ConfigurationImpl;
-import com.tencent.polaris.factory.config.ai.AiConfigImpl;
-import com.tencent.polaris.factory.config.ai.AiConnectorConfigImpl;
 import com.tencent.polaris.factory.config.global.GlobalConfigImpl;
+import com.tencent.polaris.factory.config.skill.SkillConfigImpl;
+import com.tencent.polaris.factory.config.skill.SkillConnectorConfigImpl;
 import com.tencent.polaris.factory.config.provider.LosslessConfigImpl;
 import java.util.List;
 import java.util.Objects;
@@ -87,11 +87,11 @@ public class PolarisContextManager implements AutoCloseable {
         GlobalConfigImpl globalConfig = (GlobalConfigImpl) config.getGlobal();
         globalConfig.getStatReporter().setEnable(false);
         List<String> skillAddresses = properties.skillAddressList();
-        AiConfigImpl aiConfig = (AiConfigImpl) config.getAi();
-        AiConnectorConfigImpl skillConnector = aiConfig.getServerConnector();
+        SkillConfigImpl skillConfig = (SkillConfigImpl) config.getSkill();
+        SkillConnectorConfigImpl skillConnector = skillConfig.getServerConnector();
         if (skillConnector == null) {
-            skillConnector = new AiConnectorConfigImpl();
-            aiConfig.setServerConnector(skillConnector);
+            skillConnector = new SkillConnectorConfigImpl();
+            skillConfig.setServerConnector(skillConnector);
         }
         skillConnector.setAddresses(skillAddresses);
         LosslessConfigImpl losslessConfig = (LosslessConfigImpl) config.getProvider().getLossless();
