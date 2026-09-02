@@ -28,4 +28,7 @@ public final class PolarisSkillConstants {
     public static final String LOCATION_PREFIX = "namespace:";
     public static final String FORMAT_ZIP = "zip";
     public static final String DEFAULT_NAMESPACE = "default";
+
+    public static final String MOUNTED_REPO_TYPE = "polaris-mounted";
+    public static final String MOUNTED_SOURCE_PREFIX = "polaris-mounted:";
 }

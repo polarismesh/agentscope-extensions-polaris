@@ -27,7 +27,7 @@ public final class PolarisConstants {
     private PolarisConstants() {
     }
 
-    /** {@code agentscope.polaris} — shared connection config (address/namespace/token). */
+    /** {@code agentscope.polaris} — shared connection (address/skill-address/namespace/token). */
     public static final String POLARIS_PREFIX = "agentscope.polaris";
 
     /** {@code agentscope.polaris.a2a} — A2A total switch + registry/discovery behavior. */

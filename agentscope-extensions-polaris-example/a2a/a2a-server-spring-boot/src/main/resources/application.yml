@@ -6,12 +6,16 @@ spring:
   main:
     banner-mode: off
 
+# Default: echo the last user message (no LLM). Set A2A_ECHO_USER_INPUT=false to use OpenAI.
+a2a:
+  echo-user-input: ${A2A_ECHO_USER_INPUT:true}
+
 agentscope:
-  # Build the model via the agentscope-spring-boot-starter (OpenAI-compatible).
+  # Used only when a2a.echo-user-input=false (starter creates OpenAIChatModel).
   model:
     provider: openai
   openai:
-    api-key: ${TOKEN_HUB_API_KEY}
+    api-key: ${TOKEN_HUB_API_KEY:}
     base-url: ${TOKEN_HUB_BASE_URL:https://api.openai.com/v1}
     model-name: ${OPENAI_MODEL:deepseek-v4-flash}
 
@@ -19,10 +23,8 @@ agentscope:
   agent:
     enabled: true
     name: polaris-a2a-example-agent
-    sys-prompt: >-
-      You are a helpful assistant. Use the provided tools when the user asks about
-      weather, arithmetic, or the current time. Reply concisely.
-    max-iters: 10
+    sys-prompt: ${A2A_SYS_PROMPT:Echo the latest user message. Do not call tools.}
+    max-iters: ${A2A_MAX_ITERS:1}
 
   # A2A server + agent card
   a2a:
@@ -49,7 +51,8 @@ agentscope:
             description: Get the current date and time.
             tags: [time]
   polaris:
-    address: ${POLARIS_ADDRESS:114.132.133.191:8091}
+    address: ${POLARIS_ADDRESS:127.0.0.1:8091}
+    skill-address: ${POLARIS_SKILL_ADDRESS:127.0.0.1:8094}
     namespace: ${POLARIS_NAMESPACE:default}
     token: ${POLARIS_TOKEN:}
     enabled: true

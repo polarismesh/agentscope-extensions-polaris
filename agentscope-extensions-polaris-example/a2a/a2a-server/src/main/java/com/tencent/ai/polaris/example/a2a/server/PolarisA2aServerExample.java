@@ -57,11 +57,13 @@ import java.util.concurrent.CountDownLatch;
  * <ul>
  *   <li>{@code POLARIS_ADDRESS} — Polaris server address, default {@code 127.0.0.1:8091}</li>
  *   <li>{@code A2A_AGENT_NAME} — agent (Polaris service) name, default {@code polaris-a2a-example-agent}</li>
- *   <li>{@code A2A_SERVER_HOST} — exported host written into the card, default {@code localhost}</li>
- *   <li>{@code A2A_SERVER_PORT} — HTTP listen port, default {@code 8888}</li>
- *   <li>{@code OPENAI_API_KEY} — required, LLM api key</li>
- *   <li>{@code OPENAI_BASE_URL} — default {@code https://api.openai.com/v1}</li>
- *   <li>{@code OPENAI_MODEL} — default {@code gpt-4o-mini}</li>
+ *   <li>{@code A2A_SERVER_PORT} — HTTP listen port, default {@code 8888}. Advertise host is not set;
+ *       AgentScope {@code DeploymentProperties} fills the local IP when host is null.</li>
+ *   <li>{@code A2A_ECHO_USER_INPUT} — default {@code true}: skip the LLM and echo the last
+ *       user message. Set {@code false} to use an OpenAI-compatible model.</li>
+ *   <li>{@code TOKEN_HUB_API_KEY} — required when echo is off</li>
+ *   <li>{@code TOKEN_HUB_BASE_URL} — default {@code https://api.openai.com/v1}</li>
+ *   <li>{@code OPENAI_MODEL} — default {@code deepseek-v4-flash}</li>
  * </ul>
  *
  * <p>Once running, verify with curl:
@@ -79,40 +81,39 @@ public class PolarisA2aServerExample {
     private static final Logger log = LoggerFactory.getLogger(PolarisA2aServerExample.class);
 
     public static void main(String[] args) throws Exception {
-        String polarisAddress = env("POLARIS_ADDRESS", "114.132.133.191:8091");
+        String polarisAddress = env("POLARIS_DISCOVERY_ADDRESS", "127.0.0.1:8091");
         String agentName = env("A2A_AGENT_NAME", "polaris-a2a-example-agent");
-        String host = env("A2A_SERVER_HOST", "localhost");
         int port = Integer.parseInt(env("A2A_SERVER_PORT", "8888"));
+        DeploymentProperties deployment = new DeploymentProperties.Builder().port(port).path("/").build();
+        String host = deployment.host();
 
         // 1. Polaris shared context + registry
         PolarisContextManager context = PolarisContextManager.fromAddress(polarisAddress);
         PolarisAgentRegistry registry = PolarisAgentRegistry.builder(context).build();
 
-        // 2. Build the agent: OpenAI-compatible model + a few tools
-        Model model = OpenAIChatModel.builder()
-                .apiKey(requireEnv("TOKEN_HUB_API_KEY"))
-                .baseUrl(env("TOKEN_HUB_BASE_URL", "https://api.openai.com/v1"))
-                .modelName(env("OPENAI_MODEL", "deepseek-v4-flash"))
-                .build();
+        // 2. Build the agent. Test environments often cannot reach an LLM; echo the last user
+        //    input by default. Set A2A_ECHO_USER_INPUT=false to use an OpenAI-compatible model.
+        boolean echoUserInput = isTruthy(env("A2A_ECHO_USER_INPUT", "false"));
+        Model model = echoUserInput ? new EchoLastUserInputModel() : openAiModel();
+        log.info("Using model {}", model.getModelName());
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(new ExampleTools());
         ReActAgent.Builder agentBuilder = ReActAgent.builder()
                 .name(agentName)
                 .description("An A2A agent registered to Polaris, able to check weather, calculate, and tell time.")
-                .sysPrompt("You are a helpful assistant. Use the provided tools when the user asks about "
-                        + "weather, arithmetic, or the current time. Reply concisely.")
+                .sysPrompt(echoUserInput
+                        ? "Echo the latest user message. Do not call tools."
+                        : "You are a helpful assistant. Use the provided tools when the user asks about "
+                                + "weather, arithmetic, or the current time. Reply concisely.")
                 .model(model)
                 .toolkit(toolkit)
-                .maxIters(10);
+                .maxIters(echoUserInput ? 1 : 10);
 
         // 3. Assemble the A2A server (AgentScopeA2aServer only assembles handlers, it does NOT listen on a port)
-        DeploymentProperties deployment = new DeploymentProperties.Builder()
-                .host(host).port(port).path("/").build();
         ConfigurableAgentCard agentCard = new ConfigurableAgentCard.Builder()
                 .name(agentName)
                 .description("An A2A agent registered to Polaris, able to check weather, calculate, and tell time.")
                 .version("1.0.0")
-                .url("http://" + host + ":" + port + "/")
                 .preferredTransport(TransportProtocol.JSONRPC.asString())
                 .build();
         AgentScopeA2aServer a2aServer = AgentScopeA2aServer.builder(agentBuilder)
@@ -214,6 +215,18 @@ public class PolarisA2aServerExample {
     private static String env(String key, String def) {
         String v = System.getenv(key);
         return v == null || v.isBlank() ? def : v;
+    }
+
+    private static Model openAiModel() {
+        return OpenAIChatModel.builder()
+                .apiKey(requireEnv("TOKEN_HUB_API_KEY"))
+                .baseUrl(env("TOKEN_HUB_BASE_URL", "https://api.openai.com/v1"))
+                .modelName(env("OPENAI_MODEL", "deepseek-v4-flash"))
+                .build();
+    }
+
+    private static boolean isTruthy(String value) {
+        return "1".equals(value) || "true".equalsIgnoreCase(value) || "yes".equalsIgnoreCase(value);
     }
 
     private static String requireEnv(String key) {

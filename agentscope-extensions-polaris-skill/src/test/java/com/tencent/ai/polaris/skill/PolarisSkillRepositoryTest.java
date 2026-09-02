@@ -20,11 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.tencent.ai.polaris.core.PolarisContextManager;
 import com.tencent.polaris.ai.api.core.SkillAPI;
 import com.tencent.polaris.api.exception.PolarisException;
 import com.tencent.polaris.api.exception.ErrorCode;
@@ -61,8 +63,25 @@ class PolarisSkillRepositoryTest {
     }
 
     @Test
+    void constructorRejectsNullContext() {
+        assertThrows(NullPointerException.class, () -> new PolarisSkillRepository(null));
+    }
+
+    @Test
+    void constructorFromContextUsesSharedSkillApi() {
+        PolarisContextManager context = mock(PolarisContextManager.class);
+        when(context.skillAPI()).thenReturn(skillAPI);
+        when(context.getNamespace()).thenReturn("prod");
+
+        PolarisSkillRepository created = new PolarisSkillRepository(context);
+        assertEquals("polaris:prod", created.getSource());
+    }
+
+    @Test
     void constructorRejectsNullSkillApi() {
-        assertThrows(IllegalArgumentException.class, () -> new PolarisSkillRepository(null, "default"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new PolarisSkillRepository((SkillAPI) null, "default"));
     }
 
     @Test
@@ -113,6 +132,31 @@ class PolarisSkillRepositoryTest {
         assertEquals("sql-analysis", captor.getValue().getName());
         assertEquals("default", captor.getValue().getNamespace());
         assertEquals("zip", captor.getValue().getFormat());
+    }
+
+    @Test
+    void getSkillWrapsFlatPolarisZipUnderSkillName() throws Exception {
+        SkillDownloadResponse resp = new SkillDownloadResponse();
+        resp.setCode(ServerCodes.EXECUTE_SUCCESS);
+        resp.setZipContent(flatSkillZip("fishtail-test", "A skill", "Body", "assets/ERRORS.md", "err"));
+        when(skillAPI.downloadSkill(any())).thenReturn(resp);
+
+        AgentSkill skill = repository.getSkill("fishtail-test");
+
+        assertEquals("fishtail-test", skill.getName());
+        assertEquals("A skill", skill.getDescription());
+        assertEquals("Body", skill.getSkillContent());
+        assertEquals("err", skill.getResource("assets/ERRORS.md"));
+    }
+
+    @Test
+    void getSkillLeavesMultiRootZipUnchanged() throws Exception {
+        SkillDownloadResponse resp = new SkillDownloadResponse();
+        resp.setCode(ServerCodes.EXECUTE_SUCCESS);
+        resp.setZipContent(multiRootZip());
+        when(skillAPI.downloadSkill(any())).thenReturn(resp);
+
+        assertThrows(IllegalArgumentException.class, () -> repository.getSkill("fishtail-test"));
     }
 
     @Test
@@ -201,7 +245,7 @@ class PolarisSkillRepositoryTest {
     }
 
     @Test
-    void getAllSkillsWithConfiguredNamesRedownloadsWhenRefreshIntervalIsZero() throws Exception {
+    void getAllSkillsWithConfiguredNamesReusesZipCacheWhenVersionUnchanged() throws Exception {
         repository = new PolarisSkillRepository(skillAPI, "default", "", List.of("sql-analysis"), 50, 100, 0L);
         SkillDownloadResponse resp = new SkillDownloadResponse();
         resp.setCode(ServerCodes.EXECUTE_SUCCESS);
@@ -210,7 +254,7 @@ class PolarisSkillRepositoryTest {
 
         assertEquals(1, repository.getAllSkills().size());
         assertEquals(1, repository.getAllSkills().size());
-        verify(skillAPI, times(2)).downloadSkill(any());
+        verify(skillAPI, times(1)).downloadSkill(any());
         verify(skillAPI, never()).listSkills(any());
     }
 
@@ -274,6 +318,41 @@ class PolarisSkillRepositoryTest {
                 zout.write(extraContent.getBytes(StandardCharsets.UTF_8));
                 zout.closeEntry();
             }
+        }
+        return bos.toByteArray();
+    }
+
+    private static byte[] flatSkillZip(
+            String name, String description, String body, String extraPath, String extraContent)
+            throws IOException {
+        String md = "---\nname: " + name + "\ndescription: " + description + "\n---\n" + body;
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zout = new ZipOutputStream(bos)) {
+            zout.putNextEntry(new ZipEntry("SKILL.md"));
+            zout.write(md.getBytes(StandardCharsets.UTF_8));
+            zout.closeEntry();
+            zout.putNextEntry(new ZipEntry("README.md"));
+            zout.write("readme".getBytes(StandardCharsets.UTF_8));
+            zout.closeEntry();
+            if (extraPath != null) {
+                zout.putNextEntry(new ZipEntry(extraPath));
+                zout.write(extraContent.getBytes(StandardCharsets.UTF_8));
+                zout.closeEntry();
+            }
+        }
+        return bos.toByteArray();
+    }
+
+    private static byte[] multiRootZip() throws IOException {
+        String md = "---\nname: fishtail-test\ndescription: desc\n---\nBody";
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zout = new ZipOutputStream(bos)) {
+            zout.putNextEntry(new ZipEntry("root-a/SKILL.md"));
+            zout.write(md.getBytes(StandardCharsets.UTF_8));
+            zout.closeEntry();
+            zout.putNextEntry(new ZipEntry("root-b/readme.txt"));
+            zout.write("readme".getBytes(StandardCharsets.UTF_8));
+            zout.closeEntry();
         }
         return bos.toByteArray();
     }

@@ -25,7 +25,6 @@ import com.tencent.polaris.api.plugin.skill.SkillDownloadResponse;
 import com.tencent.polaris.api.plugin.skill.SkillListRequest;
 import com.tencent.polaris.api.plugin.skill.SkillListResponse;
 import com.tencent.polaris.api.plugin.skill.SkillResource;
-import com.tencent.polaris.factory.api.APIFactory;
 import io.agentscope.core.skill.AgentSkill;
 import io.agentscope.core.skill.repository.AgentSkillRepository;
 import io.agentscope.core.skill.repository.AgentSkillRepositoryInfo;
@@ -33,15 +32,25 @@ import io.agentscope.core.skill.util.SkillUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Read-only {@link AgentSkillRepository} backed by polaris-java {@link SkillAPI}.
  *
- * <p>{@link #getSkill(String)} downloads a skill zip and builds an {@link AgentSkill} via
+ * <p>{@link #getSkill(String)} downloads a skill zip, wraps flat Polaris packages under
+ * {@code name/} when needed, then builds an {@link AgentSkill} via
  * {@link SkillUtil#createFromZip(byte[], String)}. {@link #getAllSkills()} lists published
  * skills (or a configured name set) and caches {@link AgentSkill} by {@code name#version}.
  * Writes are no-ops. {@link #close()} does not destroy {@link SkillAPI} because it shares
@@ -70,29 +79,71 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     private volatile long lastListAtMs;
 
     /**
-     * Creates a repository that downloads the server-active skill version.
+     * Creates a repository from a shared Polaris context using the server-active version.
+     *
+     * @param context shared Polaris context (must not be null)
+     */
+    public PolarisSkillRepository(PolarisContextManager context) {
+        this(context, "");
+    }
+
+    /**
+     * Creates a repository from a shared Polaris context.
+     *
+     * @param context shared Polaris context (must not be null)
+     * @param version skill version; blank means the server-active version
+     */
+    public PolarisSkillRepository(PolarisContextManager context, String version) {
+        this(context, version, List.of(), DEFAULT_LIST_LIMIT, DEFAULT_MAX_SKILLS,
+                DEFAULT_LIST_REFRESH_INTERVAL_MS);
+    }
+
+    /**
+     * Creates a repository from a shared Polaris context with list filters and cache settings.
+     *
+     * @param context               shared Polaris context (must not be null)
+     * @param version               skill version; blank means the server-active version
+     * @param names                 if non-empty, only these skill names are loaded (List is skipped)
+     * @param listLimit             page size for ListSkills
+     * @param maxSkills             maximum skills to load from List
+     * @param listRefreshIntervalMs reuse the last ListSkills result within this interval;
+     *                              zip cache is keyed by {@code name#version} and is not TTL-evicted
+     */
+    public PolarisSkillRepository(
+            PolarisContextManager context,
+            String version,
+            List<String> names,
+            int listLimit,
+            int maxSkills,
+            long listRefreshIntervalMs) {
+        this(requireContext(context).skillAPI(), context.getNamespace(), version, names, listLimit,
+                maxSkills, listRefreshIntervalMs);
+    }
+
+    /**
+     * Test-only constructor that injects {@link SkillAPI} directly.
      *
      * @param skillAPI  the Polaris skill API (must not be null)
      * @param namespace the Polaris namespace (blank treated as {@code default})
      */
-    public PolarisSkillRepository(SkillAPI skillAPI, String namespace) {
+    PolarisSkillRepository(SkillAPI skillAPI, String namespace) {
         this(skillAPI, namespace, "");
     }
 
     /**
-     * Creates a repository that downloads a specific skill version.
+     * Test-only constructor that injects {@link SkillAPI} and a fixed version.
      *
      * @param skillAPI  the Polaris skill API (must not be null)
      * @param namespace the Polaris namespace (blank treated as {@code default})
      * @param version   skill version; blank means the server-active version
      */
-    public PolarisSkillRepository(SkillAPI skillAPI, String namespace, String version) {
+    PolarisSkillRepository(SkillAPI skillAPI, String namespace, String version) {
         this(skillAPI, namespace, version, List.of(), DEFAULT_LIST_LIMIT, DEFAULT_MAX_SKILLS,
                 DEFAULT_LIST_REFRESH_INTERVAL_MS);
     }
 
     /**
-     * Creates a repository with list filters and cache settings.
+     * Test-only constructor that injects {@link SkillAPI} with list filters and cache settings.
      *
      * @param skillAPI              the Polaris skill API (must not be null)
      * @param namespace             the Polaris namespace (blank treated as {@code default})
@@ -100,9 +151,10 @@ public class PolarisSkillRepository implements AgentSkillRepository {
      * @param names                 if non-empty, only these skill names are loaded (List is skipped)
      * @param listLimit             page size for ListSkills
      * @param maxSkills             maximum skills to load from List
-     * @param listRefreshIntervalMs reuse last refs (List or configured names) within this interval
+     * @param listRefreshIntervalMs reuse the last ListSkills result within this interval;
+     *                              zip cache is keyed by {@code name#version} and is not TTL-evicted
      */
-    public PolarisSkillRepository(
+    PolarisSkillRepository(
             SkillAPI skillAPI,
             String namespace,
             String version,
@@ -142,9 +194,11 @@ public class PolarisSkillRepository implements AgentSkillRepository {
      * @return a repository bound to {@code context}'s namespace
      */
     public static PolarisSkillRepository from(PolarisContextManager context, String version) {
-        Objects.requireNonNull(context, "context");
-        SkillAPI skillAPI = APIFactory.createSkillAPIByContext(context.getSdkContext());
-        return new PolarisSkillRepository(skillAPI, context.getNamespace(), version);
+        return new PolarisSkillRepository(context, version);
+    }
+
+    private static PolarisContextManager requireContext(PolarisContextManager context) {
+        return Objects.requireNonNull(context, "context");
     }
 
     @Override
@@ -157,7 +211,8 @@ public class PolarisSkillRepository implements AgentSkillRepository {
             if (isNotFound(resp) || resp.getZipContent() == null || resp.getZipContent().length == 0) {
                 throw new IllegalArgumentException("Skill not found: " + name.trim());
             }
-            return SkillUtil.createFromZip(resp.getZipContent(), getSource());
+            return SkillUtil.createFromZip(
+                    adaptZipForSkillUtil(resp.getZipContent(), name.trim()), getSource());
         } catch (PolarisException e) {
             throw new RuntimeException("Failed to load skill from Polaris: " + name.trim(), e);
         }
@@ -252,6 +307,10 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     }
 
     private void refreshRefsIfNeeded() {
+        if (!configuredNames.isEmpty()) {
+            lastRefs = toConfiguredRefs();
+            return;
+        }
         long now = System.currentTimeMillis();
         if (lastListAtMs != 0 && now - lastListAtMs < listRefreshIntervalMs) {
             return;
@@ -261,21 +320,8 @@ public class PolarisSkillRepository implements AgentSkillRepository {
             if (lastListAtMs != 0 && now - lastListAtMs < listRefreshIntervalMs) {
                 return;
             }
-            if (!configuredNames.isEmpty()) {
-                List<SkillRef> refs = toConfiguredRefs();
-                lastRefs = refs;
-                evictCacheForRefs(refs);
-                lastListAtMs = System.currentTimeMillis();
-                return;
-            }
             lastRefs = listSkillRefs();
             lastListAtMs = System.currentTimeMillis();
-        }
-    }
-
-    private void evictCacheForRefs(List<SkillRef> refs) {
-        for (SkillRef ref : refs) {
-            skillCache.remove(cacheKey(ref));
         }
     }
 
@@ -364,6 +410,83 @@ public class PolarisSkillRepository implements AgentSkillRepository {
 
     private static boolean isNotFound(SkillDownloadResponse resp) {
         return resp.getCode() == ServerCodes.NOT_FOUND_RESOURCE;
+    }
+
+    /**
+     * Polaris persists skill folder contents at zip root ({@code SKILL.md}, {@code assets/}...).
+     * {@link SkillUtil#createFromZip} requires a single wrapper directory; wrap only when a
+     * file sits at the zip root. Already-rooted or multi-root zips are left unchanged.
+     */
+    private static byte[] adaptZipForSkillUtil(byte[] zipBytes, String skillName) {
+        Map<String, byte[]> entries;
+        try {
+            entries = readZipFileEntries(zipBytes);
+        } catch (IOException | IllegalArgumentException e) {
+            return zipBytes;
+        }
+        if (entries.isEmpty() || !hasRootLevelFile(entries)) {
+            return zipBytes;
+        }
+        try {
+            return wrapEntriesUnder(entries, skillName);
+        } catch (IOException e) {
+            return zipBytes;
+        }
+    }
+
+    private static boolean hasRootLevelFile(Map<String, byte[]> entries) {
+        for (String entryName : entries.keySet()) {
+            if (entryName.indexOf('/') < 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Map<String, byte[]> readZipFileEntries(byte[] zipBytes) throws IOException {
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        try (ZipInputStream zipIn = new ZipInputStream(
+                new ByteArrayInputStream(zipBytes), StandardCharsets.UTF_8)) {
+            ZipEntry entry;
+            while ((entry = zipIn.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                entries.put(normalizeZipEntryName(entry.getName()), zipIn.readAllBytes());
+            }
+        }
+        return entries;
+    }
+
+    private static String normalizeZipEntryName(String entryName) {
+        if (entryName == null || entryName.isEmpty()) {
+            throw new IllegalArgumentException("Zip entry name cannot be null or empty.");
+        }
+        String normalized = entryName.replace('\\', '/');
+        if (normalized.startsWith("/")) {
+            throw new IllegalArgumentException("Zip entry name must be a relative path.");
+        }
+        String[] segments = normalized.split("/");
+        for (String segment : segments) {
+            if ("..".equals(segment)) {
+                throw new IllegalArgumentException(
+                        "Zip entry name must not contain parent directory segments.");
+            }
+        }
+        return normalized;
+    }
+
+    private static byte[] wrapEntriesUnder(Map<String, byte[]> entries, String skillName)
+            throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zipOut = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+                zipOut.putNextEntry(new ZipEntry(skillName + "/" + entry.getKey()));
+                zipOut.write(entry.getValue());
+                zipOut.closeEntry();
+            }
+        }
+        return output.toByteArray();
     }
 
     record SkillRef(String name, String version) {}

@@ -8,25 +8,22 @@ import io.agentscope.core.a2a.agent.card.AgentCardResolver;
 import com.tencent.polaris.api.core.ConsumerAPI;
 import com.tencent.polaris.api.exception.PolarisException;
 import com.tencent.polaris.api.pojo.Instance;
-import com.tencent.polaris.api.rpc.GetAllInstancesRequest;
+import com.tencent.polaris.api.rpc.GetOneInstanceRequest;
 import com.tencent.polaris.api.rpc.InstancesResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * AgentScope A2A card resolver backed by polaris-java.
  *
- * <p>Uses a pull model: {@link #getAgentCard(String)} looks up the cached card, and
- * on miss fetches all instances of the service named after the agent via
- * {@code ConsumerAPI.getAllInstances}, then reads the serialized card from the first
- * instance whose metadata carries {@link PolarisA2aConstants#META_AGENT_CARD}.
- *
- * <p>Push via {@code LocalRegistry.registerResourceListener} is a v2 enhancement; the
- * {@link AgentCardResolver} interface stays unchanged so the upgrade is transparent.
+ * <p>Each {@link #getAgentCard(String)} call uses {@code ConsumerAPI.getOneInstance} so
+ * Polaris routing and load balancing pick one instance, then reads the serialized
+ * {@link AgentCard} from that instance's {@link PolarisA2aConstants#META_AGENT_CARD}
+ * metadata. Cards are not cached locally; {@link io.agentscope.core.a2a.agent.A2aAgent}
+ * rebuilds the A2A client on every call and will therefore load-balance across replicas.
  */
 public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseable {
 
@@ -34,7 +31,6 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
 
     private final ConsumerAPI consumerAPI;
     private final String namespace;
-    private final ConcurrentHashMap<String, AgentCard> cache = new ConcurrentHashMap<>();
 
     public PolarisAgentCardResolver(PolarisContextManager context) {
         this(context.consumerAPI(), context.getNamespace());
@@ -48,32 +44,25 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
     @Override
     public AgentCard getAgentCard(String agentName) {
         Objects.requireNonNull(agentName, "agentName");
-        return cache.computeIfAbsent(agentName, this::fetchFromPolaris);
+        return fetchFromPolaris(agentName);
     }
 
     private AgentCard fetchFromPolaris(String agentName) {
-        GetAllInstancesRequest req = GetAllInstancesRequest.builder()
-                .namespace(namespace)
-                .service(agentName)
-                .build();
+        GetOneInstanceRequest req = new GetOneInstanceRequest();
+        req.setNamespace(namespace);
+        req.setService(agentName);
         InstancesResponse resp;
         try {
-            resp = consumerAPI.getAllInstances(req);
+            resp = consumerAPI.getOneInstance(req);
         } catch (PolarisException e) {
             throw new AgentCardNotFoundException(agentName, e);
         }
-        Instance[] instances = resp.getInstances();
-        if (instances == null) {
+        Instance inst = resp == null ? null : resp.getInstance();
+        if (inst == null) {
             throw new AgentCardNotFoundException(agentName);
         }
-        for (Instance inst : instances) {
-            if (!inst.isHealthy()) {
-                continue;
-            }
-            Map<String, String> metadata = inst.getMetadata();
-            if (metadata == null) {
-                continue;
-            }
+        Map<String, String> metadata = inst.getMetadata();
+        if (metadata != null) {
             String json = metadata.get(PolarisA2aConstants.META_AGENT_CARD);
             if (json != null) {
                 AgentCard card = AgentCardCodec.fromJson(json);
@@ -85,19 +74,9 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
         throw new AgentCardNotFoundException(agentName);
     }
 
-    /** Drop the cached card so the next lookup re-fetches from polaris. */
-    public void invalidate(String agentName) {
-        cache.remove(agentName);
-    }
-
-    /** Clear the entire cache. */
-    public void invalidateAll() {
-        cache.clear();
-    }
-
     @Override
     public void close() {
-        cache.clear();
+        // no local cache to drop; each getAgentCard hits Polaris getOneInstance
     }
 
     public static Builder builder(PolarisContextManager context) {

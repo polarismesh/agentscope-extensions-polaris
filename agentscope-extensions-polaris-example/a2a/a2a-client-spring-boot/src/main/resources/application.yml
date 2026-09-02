@@ -8,7 +8,7 @@ agentscope:
   a2a:
     agent-name: ${A2A_AGENT_NAME:polaris-a2a-example-agent}
   polaris:
-    address: ${POLARIS_ADDRESS:114.132.133.191:8091}
+    address: ${POLARIS_DISCOVERY_ADDRESS:127.0.0.1:8091}
     namespace: ${POLARIS_NAMESPACE:default}
     token: ${POLARIS_TOKEN:}
     a2a:

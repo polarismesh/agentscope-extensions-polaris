@@ -37,12 +37,37 @@ agentscope-extensions-polaris (root)
 
 ## Skill Usage
 
-`PolarisSkillRepository` implements AgentScope's `AgentSkillRepository` interface and fetches published Skill packages from Polaris (read-only). See the full example at [`agentscope-extensions-polaris-example/skill/skill-client`](agentscope-extensions-polaris-example/skill/skill-client).
+`PolarisSkillRepository` implements AgentScope's `AgentSkillRepository` interface and fetches published Skill packages from Polaris (read-only). See the full example at [`agentscope-extensions-polaris-example/skill/skill-client`](agentscope-extensions-polaris-example/skill/skill-client):
+
+```bash
+POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+  java -jar agentscope-extensions-polaris-example/skill/skill-client/target/*-jar-with-dependencies.jar
+```
+
+To read only the skills declared on a Polaris service (`Service.extended_metadata`), use `PolarisMountedSkillRepository`. It extends `PolarisSkillRepository` and filters reads to the mounted name set. See [`agentscope-extensions-polaris-example/skill/skill-mounted-client`](agentscope-extensions-polaris-example/skill/skill-mounted-client):
+
+```java
+try (PolarisContextManager context =
+        PolarisContextManager.fromAddress("127.0.0.1:8091", "127.0.0.1:8094")) {
+    PolarisMountedSkillRepository repo =
+            PolarisMountedSkillRepository.from(context, "demo-agent");
+    List<AgentSkill> skills = repo.getAllSkills();
+}
+```
+
+`serviceName` must match the A2A registration name. Run the example:
+
+```bash
+POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+POLARIS_SERVICE=demo-agent \
+  java -jar agentscope-extensions-polaris-example/skill/skill-mounted-client/target/*-jar-with-dependencies.jar
+```
 
 ### Plain Java
 
 ```java
-try (PolarisContextManager context = PolarisContextManager.fromAddress("127.0.0.1:8091")) {
+try (PolarisContextManager context =
+        PolarisContextManager.fromAddress("127.0.0.1:8091", "127.0.0.1:8094")) {
     AgentSkillRepository repo = PolarisSkillRepository.from(context);
     agent = HarnessAgent.builder().skillRepository(repo) /* ... */ .build();
 }
@@ -55,7 +80,8 @@ Add the `agentscope-extensions-polaris-spring-boot-starter` dependency and confi
 ```yaml
 agentscope:
   polaris:
-    address: 127.0.0.1:8091
+    address: 127.0.0.1:8091          # registry / discovery
+    skill-address: 127.0.0.1:8094    # SkillAPI; default is discovery host + 8094
     namespace: default
     skill:
       enabled: true

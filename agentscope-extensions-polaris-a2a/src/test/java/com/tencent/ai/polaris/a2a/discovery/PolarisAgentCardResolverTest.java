@@ -6,10 +6,12 @@ import com.tencent.polaris.api.core.ConsumerAPI;
 import com.tencent.polaris.api.exception.ErrorCode;
 import com.tencent.polaris.api.exception.PolarisException;
 import com.tencent.polaris.api.pojo.Instance;
-import com.tencent.polaris.api.rpc.GetAllInstancesRequest;
+import com.tencent.polaris.api.rpc.GetOneInstanceRequest;
 import com.tencent.polaris.api.rpc.InstancesResponse;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -34,12 +36,15 @@ class PolarisAgentCardResolverTest {
     @Mock
     private ConsumerAPI consumerAPI;
 
-    private AgentCard buildCard(String name) {
+    @Captor
+    private ArgumentCaptor<GetOneInstanceRequest> requestCaptor;
+
+    private AgentCard buildCard(String name, String url) {
         return new AgentCard.Builder()
                 .name(name)
                 .description(name)
                 .version("1.0.0")
-                .url("http://localhost:8080")
+                .url(url)
                 .capabilities(new AgentCapabilities(false, false, false, List.of()))
                 .defaultInputModes(List.of("text"))
                 .defaultOutputModes(List.of("text"))
@@ -47,72 +52,72 @@ class PolarisAgentCardResolverTest {
                 .build();
     }
 
-    private Instance buildInstance(String host, int port, boolean healthy, Map<String, String> metadata) {
+    private Instance buildInstance(String host, int port, Map<String, String> metadata) {
         Instance inst = mock(Instance.class);
         lenient().when(inst.getHost()).thenReturn(host);
         lenient().when(inst.getPort()).thenReturn(port);
-        lenient().when(inst.isHealthy()).thenReturn(healthy);
         lenient().when(inst.getMetadata()).thenReturn(metadata);
         return inst;
     }
 
-    private InstancesResponse responseWith(Instance... instances) {
+    private InstancesResponse responseWith(Instance instance) {
         InstancesResponse resp = mock(InstancesResponse.class);
-        lenient().when(resp.getInstances()).thenReturn(instances);
+        org.mockito.Mockito.doReturn(instance).when(resp).getInstance();
         return resp;
     }
 
     @Test
-    void getAgentCard_resolvesFromHealthyInstanceMetadata() throws PolarisException {
-        String cardJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("weather-agent"));
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, Map.of("a2a.agent.card", cardJson));
-        doReturn(responseWith(healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+    void getAgentCard_usesLoadBalancedInstanceFromGetOneInstance() throws PolarisException {
+        String cardJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(
+                buildCard("weather-agent", "http://10.0.0.1:8080"));
+        Instance picked = buildInstance("10.0.0.1", 8080, Map.of("a2a.agent.card", cardJson));
+        doReturn(responseWith(picked)).when(consumerAPI).getOneInstance(any(GetOneInstanceRequest.class));
 
         PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
         AgentCard resolved = resolver.getAgentCard("weather-agent");
 
+        verify(consumerAPI).getOneInstance(requestCaptor.capture());
+        GetOneInstanceRequest req = requestCaptor.getValue();
+        assertEquals(NAMESPACE, req.getNamespace());
+        assertEquals("weather-agent", req.getService());
         assertEquals("weather-agent", resolved.name());
-        assertEquals("1.0.0", resolved.version());
+        assertEquals("http://10.0.0.1:8080", resolved.url());
     }
 
     @Test
-    void getAgentCard_skipsUnhealthyInstances() throws PolarisException {
-        String cardJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("echo"));
-        Instance unhealthy = buildInstance("10.0.0.2", 8081, false, Map.of("a2a.agent.card", cardJson));
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, Map.of("a2a.agent.card", cardJson));
-        doReturn(responseWith(unhealthy, healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+    void getAgentCard_loadBalancesOnEachCall() throws PolarisException {
+        String card1 = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(
+                buildCard("echo", "http://10.0.0.1:8080"));
+        String card2 = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(
+                buildCard("echo", "http://10.0.0.2:8080"));
+        Instance first = buildInstance("10.0.0.1", 8080, Map.of("a2a.agent.card", card1));
+        Instance second = buildInstance("10.0.0.2", 8080, Map.of("a2a.agent.card", card2));
+        InstancesResponse firstResp = responseWith(first);
+        InstancesResponse secondResp = responseWith(second);
+        when(consumerAPI.getOneInstance(any(GetOneInstanceRequest.class)))
+                .thenReturn(firstResp, secondResp);
 
         PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
-        AgentCard resolved = resolver.getAgentCard("echo");
+        AgentCard firstResolved = resolver.getAgentCard("echo");
+        AgentCard secondResolved = resolver.getAgentCard("echo");
 
-        assertEquals("echo", resolved.name());
+        verify(consumerAPI, times(2)).getOneInstance(any(GetOneInstanceRequest.class));
+        assertEquals("http://10.0.0.1:8080", firstResolved.url());
+        assertEquals("http://10.0.0.2:8080", secondResolved.url());
     }
 
     @Test
-    void getAgentCard_cachesAfterFirstFetch() throws PolarisException {
-        String cardJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("cached"));
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, Map.of("a2a.agent.card", cardJson));
-        doReturn(responseWith(healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
-
-        PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
-        resolver.getAgentCard("cached");
-        resolver.getAgentCard("cached");
-
-        verify(consumerAPI, times(1)).getAllInstances(any(GetAllInstancesRequest.class));
-    }
-
-    @Test
-    void getAgentCard_noInstanceWithCard_throwsNotFound() throws PolarisException {
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, Map.of());
-        doReturn(responseWith(healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+    void getAgentCard_noCardMetadata_throwsNotFound() throws PolarisException {
+        Instance picked = buildInstance("10.0.0.1", 8080, Map.of());
+        doReturn(responseWith(picked)).when(consumerAPI).getOneInstance(any(GetOneInstanceRequest.class));
 
         PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
         assertThrows(AgentCardNotFoundException.class, () -> resolver.getAgentCard("missing"));
     }
 
     @Test
-    void getAgentCard_emptyInstances_throwsNotFound() throws PolarisException {
-        doReturn(responseWith()).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+    void getAgentCard_emptyInstance_throwsNotFound() throws PolarisException {
+        doReturn(responseWith(null)).when(consumerAPI).getOneInstance(any(GetOneInstanceRequest.class));
 
         PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
         assertThrows(AgentCardNotFoundException.class, () -> resolver.getAgentCard("missing"));
@@ -120,7 +125,7 @@ class PolarisAgentCardResolverTest {
 
     @Test
     void getAgentCard_polarisException_wrapsInNotFound() throws PolarisException {
-        when(consumerAPI.getAllInstances(any(GetAllInstancesRequest.class)))
+        when(consumerAPI.getOneInstance(any(GetOneInstanceRequest.class)))
                 .thenThrow(new PolarisException(ErrorCode.API_INVALID_ARGUMENT, "server down"));
 
         PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);

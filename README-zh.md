@@ -37,12 +37,37 @@ agentscope-extensions-polaris (root)
 
 ## Skill 用法
 
-`PolarisSkillRepository` 实现 AgentScope 的 `AgentSkillRepository` 接口，从北极星拉取已发布的 Skill 包（只读）。完整示例见 [`agentscope-extensions-polaris-example/skill/skill-client`](agentscope-extensions-polaris-example/skill/skill-client)。
+`PolarisSkillRepository` 实现 AgentScope 的 `AgentSkillRepository` 接口，从北极星拉取已发布的 Skill 包（只读）。完整示例见 [`agentscope-extensions-polaris-example/skill/skill-client`](agentscope-extensions-polaris-example/skill/skill-client)：
+
+```bash
+POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+  java -jar agentscope-extensions-polaris-example/skill/skill-client/target/*-jar-with-dependencies.jar
+```
+
+只读取挂到某个北极星服务上的技能（`Service.extended_metadata`），用 `PolarisMountedSkillRepository`。它继承 `PolarisSkillRepository`，读操作按挂载名集合过滤。示例见 [`agentscope-extensions-polaris-example/skill/skill-mounted-client`](agentscope-extensions-polaris-example/skill/skill-mounted-client)：
+
+```java
+try (PolarisContextManager context =
+        PolarisContextManager.fromAddress("127.0.0.1:8091", "127.0.0.1:8094")) {
+    PolarisMountedSkillRepository repo =
+            PolarisMountedSkillRepository.from(context, "demo-agent");
+    List<AgentSkill> skills = repo.getAllSkills();
+}
+```
+
+`serviceName` 必须与 A2A 注册名一致。运行示例：
+
+```bash
+POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+POLARIS_SERVICE=demo-agent \
+  java -jar agentscope-extensions-polaris-example/skill/skill-mounted-client/target/*-jar-with-dependencies.jar
+```
 
 ### 纯 Java
 
 ```java
-try (PolarisContextManager context = PolarisContextManager.fromAddress("127.0.0.1:8091")) {
+try (PolarisContextManager context =
+        PolarisContextManager.fromAddress("127.0.0.1:8091", "127.0.0.1:8094")) {
     AgentSkillRepository repo = PolarisSkillRepository.from(context);
     agent = HarnessAgent.builder().skillRepository(repo) /* ... */ .build();
 }
@@ -55,7 +80,8 @@ try (PolarisContextManager context = PolarisContextManager.fromAddress("127.0.0.
 ```yaml
 agentscope:
   polaris:
-    address: 127.0.0.1:8091
+    address: 127.0.0.1:8091          # 注册/发现
+    skill-address: 127.0.0.1:8094    # SkillAPI，缺省用发现主机 + 8094
     namespace: default
     skill:
       enabled: true

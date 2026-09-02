@@ -124,6 +124,7 @@ class AgentscopePolarisSkillAutoConfigurationTest {
     private PolarisContextManager stubContextManager() {
         PolarisContextManager ctx = mock(PolarisContextManager.class);
         when(ctx.getNamespace()).thenReturn("default");
+        when(ctx.skillAPI()).thenReturn(mock(SkillAPI.class));
         return ctx;
     }
 

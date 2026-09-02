@@ -33,6 +33,7 @@
 
     <modules>
         <module>skill-client</module>
+        <module>skill-mounted-client</module>
     </modules>
 
     <properties>

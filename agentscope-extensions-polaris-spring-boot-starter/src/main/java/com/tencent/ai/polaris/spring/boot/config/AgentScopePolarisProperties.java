@@ -28,6 +28,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * agentscope:
  *   polaris:
  *     address: 127.0.0.1:8091
+ *     skill-address: 127.0.0.1:8094
  *     namespace: default
  *     token: <token>
  * }</pre>

@@ -22,7 +22,6 @@ import com.tencent.ai.polaris.spring.boot.AgentscopePolarisAutoConfiguration;
 import com.tencent.ai.polaris.spring.boot.config.skill.AgentScopePolarisSkillProperties;
 import com.tencent.ai.polaris.spring.boot.constants.PolarisConstants;
 import com.tencent.polaris.ai.api.core.SkillAPI;
-import com.tencent.polaris.factory.api.APIFactory;
 import io.agentscope.core.skill.repository.AgentSkillRepository;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -61,25 +60,22 @@ public class AgentscopePolarisSkillAutoConfiguration {
     @Bean(destroyMethod = "")
     @ConditionalOnMissingBean(SkillAPI.class)
     public SkillAPI skillAPI(PolarisContextManager context) {
-        return APIFactory.createSkillAPIByContext(context.getSdkContext());
+        return context.skillAPI();
     }
 
     /**
      * Registers a Polaris-backed skill repository.
      *
-     * @param skillAPI skill client (application-supplied or created by {@link #skillAPI})
      * @param context shared Polaris SDK context
      * @param skillProperties list/cache settings bound from {@code agentscope.polaris.skill}
      * @return the Polaris-backed {@link AgentSkillRepository}
      */
     @Bean
     public AgentSkillRepository polarisSkillRepository(
-            SkillAPI skillAPI,
             PolarisContextManager context,
             AgentScopePolarisSkillProperties skillProperties) {
         return new PolarisSkillRepository(
-                skillAPI,
-                context.getNamespace(),
+                context,
                 skillProperties.getVersion(),
                 skillProperties.getNames(),
                 skillProperties.getListLimit(),
