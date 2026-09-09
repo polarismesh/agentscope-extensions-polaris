@@ -63,7 +63,43 @@ POLARIS_SERVICE=demo-agent \
   java -jar agentscope-extensions-polaris-example/skill/skill-mounted-client/target/*-jar-with-dependencies.jar
 ```
 
-### 纯 Java
+### 让 Agent 用上北极星里的技能
+
+[`agentscope-extensions-polaris-example/skill/skill-agent`](agentscope-extensions-polaris-example/skill/skill-agent)
+在上面两种 repository 之上跑一个 `ReActAgent`。`ReActAgent.Builder` 接收的是 `SkillBox` 而不是
+repository，所以示例里自己做了桥接，之后由内置的 `SkillHook` 每轮把技能目录注入 system prompt：
+
+```java
+Toolkit toolkit = new Toolkit();
+SkillBox skillBox = new SkillBox(toolkit);
+for (AgentSkill skill : repo.getAllSkills()) {
+    skillBox.registration().skill(skill).apply();
+}
+ReActAgent agent = ReActAgent.builder()
+        .model(model)
+        .toolkit(toolkit)
+        .skillBox(skillBox)      // 自动注册 load_skill_through_path 与 SkillHook
+        .memory(new InMemoryMemory())
+        .build();
+```
+
+对话循环支持两个命令：`/skill-list` 列出已进入 Agent 的技能，`/skill <name>` 通过
+`load_skill_through_path` 打印某个技能的 SKILL.md。两个命令的语义写在 system prompt 里，因此接真
+模型时由模型自己完成：
+
+```bash
+POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+POLARIS_SKILL_SOURCE=published \
+TOKEN_HUB_API_KEY=sk-xxx TOKEN_HUB_BASE_URL=https://api.openai.com/v1 OPENAI_MODEL=gpt-4o \
+  java -jar agentscope-extensions-polaris-example/skill/skill-agent/target/*-jar-with-dependencies.jar
+```
+
+改用 `POLARIS_SKILL_SOURCE=mounted` 加 `POLARIS_SERVICE=demo-agent`，则只读取该服务上挂载的技能。
+测试环境接不上大模型时，不设 `TOKEN_HUB_API_KEY`（或设 `SKILL_AGENT_MOCK_LLM=true`），会切到离线
+mock 模型响应同样两个命令：它直接解析注入到 system prompt 里的技能目录，并真的发出
+`load_skill_through_path` 工具调用，北极星 → SkillBox → Agent 这条链路依然被完整验证。
+
+注意技能目录是启动时的快照；要每轮感知技能变化需要用 `HarnessAgent` 及其 `DynamicSkillHook`：
 
 ```java
 try (PolarisContextManager context =

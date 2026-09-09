@@ -63,7 +63,46 @@ POLARIS_SERVICE=demo-agent \
   java -jar agentscope-extensions-polaris-example/skill/skill-mounted-client/target/*-jar-with-dependencies.jar
 ```
 
-### Plain Java
+### Running an Agent on Polaris Skills
+
+[`agentscope-extensions-polaris-example/skill/skill-agent`](agentscope-extensions-polaris-example/skill/skill-agent)
+runs a `ReActAgent` on top of either repository. `ReActAgent.Builder` takes a `SkillBox` rather
+than a repository, so the example bridges the two and lets the built-in `SkillHook` inject the
+catalog on every turn:
+
+```java
+Toolkit toolkit = new Toolkit();
+SkillBox skillBox = new SkillBox(toolkit);
+for (AgentSkill skill : repo.getAllSkills()) {
+    skillBox.registration().skill(skill).apply();
+}
+ReActAgent agent = ReActAgent.builder()
+        .model(model)
+        .toolkit(toolkit)
+        .skillBox(skillBox)      // registers load_skill_through_path + SkillHook
+        .memory(new InMemoryMemory())
+        .build();
+```
+
+The chat loop understands `/skill-list` (list the skills that reached the agent) and
+`/skill <name>` (print one skill's SKILL.md through `load_skill_through_path`). Both commands are
+documented in the system prompt, so an OpenAI-compatible model answers them itself:
+
+```bash
+POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+POLARIS_SKILL_SOURCE=published \
+TOKEN_HUB_API_KEY=sk-xxx TOKEN_HUB_BASE_URL=https://api.openai.com/v1 OPENAI_MODEL=gpt-4o \
+  java -jar agentscope-extensions-polaris-example/skill/skill-agent/target/*-jar-with-dependencies.jar
+```
+
+Set `POLARIS_SKILL_SOURCE=mounted` plus `POLARIS_SERVICE=demo-agent` to read the mounted skills of
+one service instead. When no LLM is reachable, drop `TOKEN_HUB_API_KEY` (or set
+`SKILL_AGENT_MOCK_LLM=true`) and an offline mock model answers the same two commands — it reads the
+catalog straight out of the injected system prompt and issues the real `load_skill_through_path`
+call, so the Polaris → SkillBox → agent path is still exercised end to end.
+
+Note that the skill catalog is a startup snapshot; picking up skill changes on every turn needs
+`HarnessAgent` and its `DynamicSkillHook`:
 
 ```java
 try (PolarisContextManager context =
