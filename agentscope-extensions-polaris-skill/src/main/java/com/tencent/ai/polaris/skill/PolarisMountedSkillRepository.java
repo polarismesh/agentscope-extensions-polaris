@@ -40,8 +40,10 @@ import java.util.Objects;
  * Read-only {@link PolarisSkillRepository} limited to skills mounted on a Polaris service.
  *
  * <p>Mounted names and versions come from {@code Service.extended_metadata} entries of type
- * {@code EXTENDED_METADATA_SKILL}. Reads download through the parent repository; a skill that
- * is not mounted is treated as not found. Writes stay no-ops.
+ * {@code EXTENDED_METADATA_SKILL}: each skill is downloaded at the {@code version} declared by
+ * its {@code AgentSkill}, falling back to the repository-level version when that is blank. Reads
+ * download through the parent repository; a skill that is not mounted is treated as not found.
+ * Writes stay no-ops.
  */
 public class PolarisMountedSkillRepository extends PolarisSkillRepository {
 
@@ -73,7 +75,8 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
      *
      * @param context     shared Polaris context (must not be null)
      * @param serviceName the agent service name registered to Polaris (must not be blank)
-     * @param version     skill version; blank means the server-active version
+     * @param version     fallback skill version when the mounted metadata carries none;
+     *                    blank means the server-active version
      */
     public PolarisMountedSkillRepository(
             PolarisContextManager context, String serviceName, String version) {
@@ -96,7 +99,8 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
      * @param consumerAPI the Polaris consumer API used to read service metadata (must not be null)
      * @param namespace   the Polaris namespace (blank treated as {@code default})
      * @param serviceName the agent service name registered to Polaris (must not be blank)
-     * @param version     skill version; blank means the server-active version
+     * @param version     fallback skill version when the mounted metadata carries none;
+     *                    blank means the server-active version
      */
     PolarisMountedSkillRepository(
             SkillAPI skillAPI,
@@ -136,7 +140,8 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
      *
      * @param context     shared Polaris context
      * @param serviceName the agent service name registered to Polaris
-     * @param version     skill version; blank means the server-active version
+     * @param version     fallback skill version when the mounted metadata carries none;
+     *                    blank means the server-active version
      * @return a repository bound to {@code context}'s namespace
      */
     public static PolarisMountedSkillRepository from(
@@ -151,10 +156,11 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
         }
         String trimmed = name.trim();
         refreshMountedIfNeeded();
-        if (!mountedSkills.containsKey(trimmed)) {
+        String mountedVersion = mountedSkills.get(trimmed);
+        if (mountedVersion == null) {
             throw new IllegalArgumentException("Skill not found: " + trimmed);
         }
-        return super.getSkill(trimmed);
+        return loadSkill(trimmed, mountedVersion);
     }
 
     @Override
@@ -167,11 +173,12 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     public List<AgentSkill> getAllSkills() {
         refreshMountedIfNeeded();
         List<AgentSkill> skills = new ArrayList<>();
-        for (String name : mountedSkills.keySet()) {
+        for (Map.Entry<String, String> mounted : mountedSkills.entrySet()) {
             try {
-                skills.add(super.getSkill(name));
+                skills.add(loadSkill(mounted.getKey(), mounted.getValue()));
             } catch (RuntimeException e) {
-                log.warn("Failed to load mounted skill {} from Polaris, skipping: {}", name, e.getMessage());
+                log.warn("Failed to load mounted skill {} from Polaris, skipping: {}",
+                        mounted.getKey(), e.getMessage());
             }
         }
         return List.copyOf(skills);
@@ -244,7 +251,7 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
         return null;
     }
 
-    private static Map<String, String> resolveMountedSkills(ServiceInfo service, String version) {
+    private static Map<String, String> resolveMountedSkills(ServiceInfo service, String fallbackVersion) {
         List<ServiceProto.ExtendedMetadata> metas = service.getExtendedMetadata();
         if (metas == null || metas.isEmpty()) {
             return Map.of();
@@ -265,9 +272,21 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
                 name = skill.getId();
             }
             if (name != null && !name.isBlank()) {
-                skills.putIfAbsent(name.trim(), version);
+                skills.putIfAbsent(name.trim(), resolveSkillVersion(skill, fallbackVersion));
             }
         }
         return Collections.unmodifiableMap(skills);
+    }
+
+    /**
+     * Version carried by the mounted {@link ServiceProto.AgentSkill} wins; when it is blank the
+     * repository-level version applies, and a blank repository version means the server-active
+     * version.
+     */
+    private static String resolveSkillVersion(
+            ServiceProto.AgentSkill skill, String fallbackVersion) {
+        String skillVersion = skill.getVersion();
+        return (skillVersion == null || skillVersion.isBlank())
+                ? fallbackVersion : skillVersion.trim();
     }
 }

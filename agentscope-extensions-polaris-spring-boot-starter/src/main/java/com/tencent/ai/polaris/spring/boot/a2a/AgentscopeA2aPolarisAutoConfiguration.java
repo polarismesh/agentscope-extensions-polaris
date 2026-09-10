@@ -20,7 +20,6 @@ import com.tencent.ai.polaris.a2a.discovery.PolarisAgentCardResolver;
 import com.tencent.ai.polaris.a2a.registry.PolarisAgentRegistry;
 import com.tencent.ai.polaris.core.PolarisContextManager;
 import com.tencent.ai.polaris.spring.boot.AgentscopePolarisAutoConfiguration;
-import com.tencent.ai.polaris.spring.boot.config.a2a.AgentScopeA2aPolarisProperties;
 import com.tencent.ai.polaris.spring.boot.constants.PolarisConstants;
 import io.agentscope.core.a2a.agent.card.AgentCardResolver;
 import io.agentscope.core.a2a.server.registry.AgentRegistry;
@@ -28,7 +27,6 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
 /**
@@ -45,26 +43,22 @@ import org.springframework.context.annotation.Bean;
         name = "enabled",
         havingValue = "true",
         matchIfMissing = true)
-@EnableConfigurationProperties(AgentScopeA2aPolarisProperties.class)
 public class AgentscopeA2aPolarisAutoConfiguration {
 
     /**
      * Registers A2A agent cards to Polaris.
      *
      * @param context shared Polaris SDK context
-     * @param a2aProperties A2A registry/discovery settings
      * @return the Polaris-backed {@link AgentRegistry}
      */
     @Bean
     @ConditionalOnProperty(
-            name = "agentscope.polaris.a2a.registry.enabled",
+            prefix = PolarisConstants.A2A_POLARIS_REGISTRY_PREFIX,
+            name = "enabled",
             havingValue = "true",
             matchIfMissing = true)
-    public AgentRegistry polarisAgentRegistry(
-            PolarisContextManager context, AgentScopeA2aPolarisProperties a2aProperties) {
-        return PolarisAgentRegistry.builder(context)
-                .ttl(a2aProperties.getRegistry().getTtl())
-                .build();
+    public AgentRegistry polarisAgentRegistry(PolarisContextManager context) {
+        return PolarisAgentRegistry.builder(context).build();
     }
 
     /**

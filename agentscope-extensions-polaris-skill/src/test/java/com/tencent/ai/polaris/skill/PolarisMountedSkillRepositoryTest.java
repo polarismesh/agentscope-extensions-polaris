@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -197,6 +198,38 @@ class PolarisMountedSkillRepositoryTest {
     }
 
     @Test
+    void getSkillUsesVersionFromMountedMetadata() throws Exception {
+        repository = new PolarisMountedSkillRepository(
+                skillAPI, consumerAPI, "default", "demo-agent", "1.0.0");
+        when(consumerAPI.getServices(any()))
+                .thenReturn(servicesResponse(serviceWithSkill("sql-analysis", "2.3.0")));
+        when(skillAPI.downloadSkill(any())).thenReturn(successZip("sql-analysis", "Analyze SQL", "Run EXPLAIN"));
+
+        repository.getSkill("sql-analysis");
+
+        ArgumentCaptor<SkillDownloadRequest> captor = ArgumentCaptor.forClass(SkillDownloadRequest.class);
+        verify(skillAPI).downloadSkill(captor.capture());
+        assertEquals("2.3.0", captor.getValue().getVersion());
+    }
+
+    @Test
+    void getAllSkillsUsePerSkillMountedVersions() throws Exception {
+        when(consumerAPI.getServices(any())).thenReturn(servicesResponse(serviceWithMetadata(
+                skillMetadata("sql-analysis", "2.3.0"), skillMetadata("chart-rendering", "0.9.1"))));
+        when(skillAPI.downloadSkill(any())).thenAnswer(inv -> {
+            SkillDownloadRequest req = inv.getArgument(0);
+            return successZip(req.getName(), req.getName() + " desc", "body");
+        });
+
+        assertEquals(2, repository.getAllSkills().size());
+
+        ArgumentCaptor<SkillDownloadRequest> captor = ArgumentCaptor.forClass(SkillDownloadRequest.class);
+        verify(skillAPI, times(2)).downloadSkill(captor.capture());
+        assertEquals("2.3.0", captor.getAllValues().get(0).getVersion());
+        assertEquals("0.9.1", captor.getAllValues().get(1).getVersion());
+    }
+
+    @Test
     void getAllSkillsReturnsMountedSkillsOnly() throws Exception {
         when(consumerAPI.getServices(any()))
                 .thenReturn(servicesResponse(serviceWithSkills("sql-analysis", "chart-rendering")));
@@ -268,12 +301,21 @@ class PolarisMountedSkillRepositoryTest {
     private static ServiceInfo serviceWithSkills(String... names) {
         ServiceProto.ExtendedMetadata[] metas = new ServiceProto.ExtendedMetadata[names.length];
         for (int i = 0; i < names.length; i++) {
-            metas[i] = ServiceProto.ExtendedMetadata.newBuilder()
-                    .setType(ServiceProto.ExtendedMetadata.ExtendedMetadataType.EXTENDED_METADATA_SKILL)
-                    .setAgentSkill(ServiceProto.AgentSkill.newBuilder().setName(names[i]).build())
-                    .build();
+            metas[i] = skillMetadata(names[i], "");
         }
         return serviceWithMetadata(metas);
+    }
+
+    private static ServiceInfo serviceWithSkill(String name, String version) {
+        return serviceWithMetadata(skillMetadata(name, version));
+    }
+
+    private static ServiceProto.ExtendedMetadata skillMetadata(String name, String version) {
+        return ServiceProto.ExtendedMetadata.newBuilder()
+                .setType(ServiceProto.ExtendedMetadata.ExtendedMetadataType.EXTENDED_METADATA_SKILL)
+                .setAgentSkill(
+                        ServiceProto.AgentSkill.newBuilder().setName(name).setVersion(version).build())
+                .build();
     }
 
     private static ServiceInfo serviceWithMetadata(ServiceProto.ExtendedMetadata... metas) {

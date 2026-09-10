@@ -206,15 +206,26 @@ public class PolarisSkillRepository implements AgentSkillRepository {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("Skill name cannot be null or empty");
         }
+        return loadSkill(name.trim(), version);
+    }
+
+    /**
+     * Downloads a skill at an explicit version and builds an {@link AgentSkill} from its zip.
+     *
+     * @param name         the skill name (must already be trimmed and non-blank)
+     * @param skillVersion skill version; blank means the server-active version
+     * @return the downloaded skill
+     */
+    protected AgentSkill loadSkill(String name, String skillVersion) {
         try {
-            SkillDownloadResponse resp = downloadZip(name.trim());
+            SkillDownloadResponse resp = downloadZip(name, skillVersion);
             if (isNotFound(resp) || resp.getZipContent() == null || resp.getZipContent().length == 0) {
-                throw new IllegalArgumentException("Skill not found: " + name.trim());
+                throw new IllegalArgumentException("Skill not found: " + name);
             }
             return SkillUtil.createFromZip(
-                    adaptZipForSkillUtil(resp.getZipContent(), name.trim()), getSource());
+                    adaptZipForSkillUtil(resp.getZipContent(), name), getSource());
         } catch (PolarisException e) {
-            throw new RuntimeException("Failed to load skill from Polaris: " + name.trim(), e);
+            throw new RuntimeException("Failed to load skill from Polaris: " + name, e);
         }
     }
 
@@ -397,12 +408,12 @@ public class PolarisSkillRepository implements AgentSkillRepository {
         return code != 0 && code != ServerCodes.EXECUTE_SUCCESS;
     }
 
-    private SkillDownloadResponse downloadZip(String name) throws PolarisException {
+    private SkillDownloadResponse downloadZip(String name, String skillVersion) throws PolarisException {
         SkillDownloadRequest req = new SkillDownloadRequest();
         req.setNamespace(namespace);
         req.setName(name);
-        if (!version.isEmpty()) {
-            req.setVersion(version);
+        if (skillVersion != null && !skillVersion.isEmpty()) {
+            req.setVersion(skillVersion);
         }
         req.setFormat(PolarisSkillConstants.FORMAT_ZIP);
         return skillAPI.downloadSkill(req);

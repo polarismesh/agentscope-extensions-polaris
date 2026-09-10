@@ -52,7 +52,6 @@ agentscope:
             tags: [time]
   polaris:
     address: ${POLARIS_ADDRESS:127.0.0.1:8091}
-    skill-address: ${POLARIS_SKILL_ADDRESS:127.0.0.1:8094}
     namespace: ${POLARIS_NAMESPACE:default}
     token: ${POLARIS_TOKEN:}
     enabled: true
@@ -60,7 +59,5 @@ agentscope:
       enabled: ${POLARIS_ENABLED:true}
       registry:
         enabled: true
-        ttl: 5
       discovery:
         enabled: true
-        refresh-interval-ms: 0

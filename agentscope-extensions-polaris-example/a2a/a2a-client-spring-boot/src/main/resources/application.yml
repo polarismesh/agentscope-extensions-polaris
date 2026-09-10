@@ -17,4 +17,3 @@ agentscope:
         enabled: false
       discovery:
         enabled: true
-        refresh-interval-ms: 0

@@ -23,9 +23,9 @@ import static org.mockito.Mockito.when;
 import com.tencent.ai.polaris.core.PolarisContextManager;
 import com.tencent.ai.polaris.spring.boot.a2a.AgentscopeA2aPolarisAutoConfiguration;
 import com.tencent.ai.polaris.spring.boot.config.AgentScopePolarisProperties;
-import com.tencent.ai.polaris.spring.boot.config.a2a.AgentScopeA2aPolarisProperties;
 import io.agentscope.core.a2a.agent.card.AgentCardResolver;
 import io.agentscope.core.a2a.server.registry.AgentRegistry;
+import io.agentscope.core.skill.repository.AgentSkillRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
@@ -102,6 +102,7 @@ class AgentscopePolarisAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(AgentRegistry.class);
                     assertThat(context).hasSingleBean(AgentCardResolver.class);
+                    assertThat(context).doesNotHaveBean(AgentSkillRepository.class);
                 });
     }
 
@@ -142,22 +143,13 @@ class AgentscopePolarisAutoConfigurationTest {
                 .withPropertyValues(
                         "agentscope.polaris.address=10.0.0.1:8091",
                         "agentscope.polaris.namespace=prod",
-                        "agentscope.polaris.token=secret",
-                        "agentscope.polaris.a2a.enabled=true",
-                        "agentscope.polaris.a2a.registry.ttl=10",
-                        "agentscope.polaris.a2a.discovery.refresh-interval-ms=30000")
+                        "agentscope.polaris.token=secret")
                 .run(context -> {
                     AgentScopePolarisProperties polarisProps =
                             context.getBean(AgentScopePolarisProperties.class);
                     assertThat(polarisProps.getAddress()).isEqualTo("10.0.0.1:8091");
                     assertThat(polarisProps.getNamespace()).isEqualTo("prod");
                     assertThat(polarisProps.getToken()).isEqualTo("secret");
-
-                    AgentScopeA2aPolarisProperties a2aProps =
-                            context.getBean(AgentScopeA2aPolarisProperties.class);
-                    assertThat(a2aProps.isEnabled()).isTrue();
-                    assertThat(a2aProps.getRegistry().getTtl()).isEqualTo(10);
-                    assertThat(a2aProps.getDiscovery().getRefreshIntervalMs()).isEqualTo(30000L);
                 });
     }
 
@@ -170,7 +162,7 @@ class AgentscopePolarisAutoConfigurationTest {
     }
 
     @Configuration
-    @EnableConfigurationProperties({AgentScopePolarisProperties.class, AgentScopeA2aPolarisProperties.class})
+    @EnableConfigurationProperties(AgentScopePolarisProperties.class)
     static class PropertiesOnlyConfig {
     }
 }

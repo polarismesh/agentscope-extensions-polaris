@@ -29,7 +29,7 @@ import org.springframework.context.annotation.Bean;
  * Shared Polaris connection auto-configuration for AgentScope.
  *
  * <p>Connection settings come from {@code agentscope.polaris} and produce a shared
- * {@link PolarisContextManager}. Feature beans (A2A, later skill/MCP) live in their own
+ * {@link PolarisContextManager}. Feature beans (A2A) live in their own
  * {@code @AutoConfiguration} classes ordered after this one.
  */
 @AutoConfiguration
