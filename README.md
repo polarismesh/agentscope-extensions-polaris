@@ -65,10 +65,13 @@ POLARIS_SERVICE=demo-agent \
 
 ### Running an Agent on Polaris Skills
 
-[`agentscope-extensions-polaris-example/skill/skill-agent`](agentscope-extensions-polaris-example/skill/skill-agent)
-runs a `ReActAgent` on top of either repository. `ReActAgent.Builder` takes a `SkillBox` rather
-than a repository, so the example bridges the two and lets the built-in `SkillHook` inject the
-catalog on every turn:
+[`agentscope-extensions-polaris-example/a2a/a2a-server`](agentscope-extensions-polaris-example/a2a/a2a-server)
+registers a `ReActAgent` to Polaris over A2A and serves the skills mounted on that same service:
+`PolarisAgentRegistry` registers the agent as a Polaris service named after the agent card, and
+`PolarisMountedSkillRepository` reads the skills mounted on it, so the agent ends up serving its own
+mounted skills.
+
+`ReActAgent.Builder` takes a `SkillBox` rather than a repository, so the example bridges the two:
 
 ```java
 Toolkit toolkit = new Toolkit();
@@ -80,29 +83,39 @@ ReActAgent agent = ReActAgent.builder()
         .model(model)
         .toolkit(toolkit)
         .skillBox(skillBox)      // registers load_skill_through_path + SkillHook
-        .memory(new InMemoryMemory())
         .build();
 ```
 
-The chat loop understands `/skill-list` (list the skills that reached the agent) and
-`/skill <name>` (print one skill's SKILL.md through `load_skill_through_path`). Both commands are
-documented in the system prompt, so an OpenAI-compatible model answers them itself:
+The A2A server builds one agent per request, so this wiring lives in a `BaseReActAgentRunner`
+subclass that creates a fresh `Toolkit` and `SkillBox` each time — `skillBox(...)` rebinds the box
+to the agent's own toolkit copy, so sharing one box across concurrently built agents would let
+skill activation land on the wrong toolkit. Rebuilding per request also refreshes the catalog;
+the repositories cache list results and skill zips, so this normally does not hit the Polaris
+server. A repository failure is logged and the agent serves without skills.
+
+Talk to it with [`a2a/a2a-client`](agentscope-extensions-polaris-example/a2a/a2a-client), whose
+prompt accepts `/skill-list` (list the skills that reached the agent) and `/skill <name>` (print one
+skill's SKILL.md through `load_skill_through_path`). Both commands are documented in the system
+prompt, so an OpenAI-compatible model answers them itself:
 
 ```bash
-POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
-POLARIS_SKILL_SOURCE=published \
+POLARIS_DISCOVERY_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+A2A_AGENT_NAME=demo-agent \
 TOKEN_HUB_API_KEY=sk-xxx TOKEN_HUB_BASE_URL=https://api.openai.com/v1 OPENAI_MODEL=gpt-4o \
-  java -jar agentscope-extensions-polaris-example/skill/skill-agent/target/*-jar-with-dependencies.jar
+  java -jar agentscope-extensions-polaris-example/a2a/a2a-server/target/*-jar-with-dependencies.jar
 ```
 
-Set `POLARIS_SKILL_SOURCE=mounted` plus `POLARIS_SERVICE=demo-agent` to read the mounted skills of
-one service instead. When no LLM is reachable, drop `TOKEN_HUB_API_KEY` (or set
-`SKILL_AGENT_MOCK_LLM=true`) and an offline mock model answers the same two commands — it reads the
-catalog straight out of the injected system prompt and issues the real `load_skill_through_path`
-call, so the Polaris → SkillBox → agent path is still exercised end to end.
+Skills come from the agent's own service by default (`POLARIS_SKILL_SOURCE=mounted`); use
+`published` for every published skill in the namespace, or `none` to run without skills. Mounting
+itself happens on the Polaris side — instance registration cannot mount skills onto a service.
 
-Note that the skill catalog is a startup snapshot; picking up skill changes on every turn needs
-`HarnessAgent` and its `DynamicSkillHook`:
+When no LLM is reachable, drop `TOKEN_HUB_API_KEY` (or set `A2A_MOCK_LLM=true`) and an offline mock
+model answers the same two commands — it reads the catalog straight out of the injected system
+prompt and issues the real `load_skill_through_path` call, so the Polaris → SkillBox → agent path is
+still exercised end to end. With skills off, the mock just echoes the last user message.
+
+To let skills refresh without rebuilding the agent yourself, use `HarnessAgent` and its
+`DynamicSkillHook`:
 
 ```java
 try (PolarisContextManager context =

@@ -14,7 +14,7 @@
  * specific language governing permissions and limitations under the License.
  */
 
-package com.tencent.ai.polaris.example.skill;
+package com.tencent.ai.polaris.example.a2a.server;
 
 import io.agentscope.core.message.ContentBlock;
 import io.agentscope.core.message.Msg;

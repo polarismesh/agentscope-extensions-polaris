@@ -65,9 +65,12 @@ POLARIS_SERVICE=demo-agent \
 
 ### 让 Agent 用上北极星里的技能
 
-[`agentscope-extensions-polaris-example/skill/skill-agent`](agentscope-extensions-polaris-example/skill/skill-agent)
-在上面两种 repository 之上跑一个 `ReActAgent`。`ReActAgent.Builder` 接收的是 `SkillBox` 而不是
-repository，所以示例里自己做了桥接，之后由内置的 `SkillHook` 每轮把技能目录注入 system prompt：
+[`agentscope-extensions-polaris-example/a2a/a2a-server`](agentscope-extensions-polaris-example/a2a/a2a-server)
+把一个 `ReActAgent` 通过 A2A 注册到北极星，并使用挂在同一个服务上的技能：`PolarisAgentRegistry`
+以 agent card 名字注册 Polaris 服务，`PolarisMountedSkillRepository` 按同一个名字读取挂载的技能，
+于是 agent 提供的正是挂在它自己身上的技能。
+
+`ReActAgent.Builder` 接收的是 `SkillBox` 而不是 repository，所以示例里自己做了桥接：
 
 ```java
 Toolkit toolkit = new Toolkit();
@@ -79,27 +82,35 @@ ReActAgent agent = ReActAgent.builder()
         .model(model)
         .toolkit(toolkit)
         .skillBox(skillBox)      // 自动注册 load_skill_through_path 与 SkillHook
-        .memory(new InMemoryMemory())
         .build();
 ```
 
-对话循环支持两个命令：`/skill-list` 列出已进入 Agent 的技能，`/skill <name>` 通过
-`load_skill_through_path` 打印某个技能的 SKILL.md。两个命令的语义写在 system prompt 里，因此接真
-模型时由模型自己完成：
+A2A server 每个请求都会新建 agent，因此这段接线放在一个 `BaseReActAgentRunner` 子类里，每次都新建
+`Toolkit` 与 `SkillBox`——`skillBox(...)` 会把该 box 重新绑定到当前 agent 的 toolkit 副本上，多个
+agent 共享一个 box 时并发构建会让技能激活作用到别的 toolkit 上。每请求重建同时也刷新了技能目录；
+两个 repository 都会缓存列表结果与技能 zip，正常不会真的打到北极星服务端。读取失败只记警告，agent
+在无技能状态下继续服务。
+
+用 [`a2a/a2a-client`](agentscope-extensions-polaris-example/a2a/a2a-client) 与它对话，其输入支持
+`/skill-list`（列出已进入 Agent 的技能）和 `/skill <name>`（通过 `load_skill_through_path` 打印某个
+技能的 SKILL.md）。两个命令的语义写在 system prompt 里，因此接真模型时由模型自己完成：
 
 ```bash
-POLARIS_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
-POLARIS_SKILL_SOURCE=published \
+POLARIS_DISCOVERY_ADDRESS=127.0.0.1:8091 POLARIS_SKILL_ADDRESS=127.0.0.1:8094 \
+A2A_AGENT_NAME=demo-agent \
 TOKEN_HUB_API_KEY=sk-xxx TOKEN_HUB_BASE_URL=https://api.openai.com/v1 OPENAI_MODEL=gpt-4o \
-  java -jar agentscope-extensions-polaris-example/skill/skill-agent/target/*-jar-with-dependencies.jar
+  java -jar agentscope-extensions-polaris-example/a2a/a2a-server/target/*-jar-with-dependencies.jar
 ```
 
-改用 `POLARIS_SKILL_SOURCE=mounted` 加 `POLARIS_SERVICE=demo-agent`，则只读取该服务上挂载的技能。
-测试环境接不上大模型时，不设 `TOKEN_HUB_API_KEY`（或设 `SKILL_AGENT_MOCK_LLM=true`），会切到离线
-mock 模型响应同样两个命令：它直接解析注入到 system prompt 里的技能目录，并真的发出
-`load_skill_through_path` 工具调用，北极星 → SkillBox → Agent 这条链路依然被完整验证。
+技能默认取自 agent 自己的服务（`POLARIS_SKILL_SOURCE=mounted`）；`published` 表示 namespace 下所有
+已发布技能，`none` 表示不用技能。挂载动作本身在北极星侧完成——实例注册无法把技能挂到服务上。
 
-注意技能目录是启动时的快照；要每轮感知技能变化需要用 `HarnessAgent` 及其 `DynamicSkillHook`：
+测试环境接不上大模型时，不设 `TOKEN_HUB_API_KEY`（或设 `A2A_MOCK_LLM=true`），会切到离线 mock 模型
+响应同样两个命令：它直接解析注入到 system prompt 里的技能目录，并真的发出
+`load_skill_through_path` 工具调用，北极星 → SkillBox → Agent 这条链路依然被完整验证。关闭技能时，
+mock 只回显最后一条用户消息。
+
+若希望技能自动刷新而不自己重建 agent，可以用 `HarnessAgent` 及其 `DynamicSkillHook`：
 
 ```java
 try (PolarisContextManager context =

@@ -34,7 +34,6 @@
     <modules>
         <module>skill-client</module>
         <module>skill-mounted-client</module>
-        <module>skill-agent</module>
     </modules>
 
     <properties>
