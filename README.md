@@ -114,21 +114,19 @@ try (PolarisContextManager context =
 
 ### Spring Boot
 
-Add the `agentscope-extensions-polaris-spring-boot-starter` dependency and configure:
+The starter does not auto-configure a skill repository (same as Nacos). Add
+`agentscope-extensions-polaris-skill` and register the bean yourself.
 
-```yaml
-agentscope:
-  polaris:
-    address: 127.0.0.1:8091          # registry / discovery
-    skill-address: 127.0.0.1:8094    # SkillAPI; default is discovery host + 8094
-    namespace: default
-    skill:
-      enabled: true
-      names: []          # empty lists all published skills
-      version: ""        # empty uses activeVersion
+```java
+@Bean
+public AgentSkillRepository skillRepository(PolarisContextManager context) {
+    return PolarisSkillRepository.from(context);
+}
 ```
 
-Inject the auto-configured `AgentSkillRepository` bean into `HarnessAgent` / `ReActAgent` (same as existing SkillBox registration).
+`PolarisContextManager` still comes from `agentscope.polaris.address` /
+`skill-address`. Wire the bean into `HarnessAgent` / `ReActAgent` the same way as
+other `AgentSkillRepository` implementations.
 
 ### Notes
 

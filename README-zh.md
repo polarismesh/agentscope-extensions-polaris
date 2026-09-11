@@ -111,21 +111,18 @@ try (PolarisContextManager context =
 
 ### Spring Boot
 
-添加依赖 `agentscope-extensions-polaris-spring-boot-starter`，配置：
+starter 不会自动装配 skill 仓库（与 Nacos 一致）。自行引入
+`agentscope-extensions-polaris-skill` 并声明 bean。
 
-```yaml
-agentscope:
-  polaris:
-    address: 127.0.0.1:8091          # 注册/发现
-    skill-address: 127.0.0.1:8094    # SkillAPI，缺省用发现主机 + 8094
-    namespace: default
-    skill:
-      enabled: true
-      names: []          # 空则 List 全部 published
-      version: ""        # 空则 activeVersion
+```java
+@Bean
+public AgentSkillRepository skillRepository(PolarisContextManager context) {
+    return PolarisSkillRepository.from(context);
+}
 ```
 
-将自动配置的 `AgentSkillRepository` bean 注入 `HarnessAgent` / `ReActAgent`（与现有 SkillBox 注册方式一致）。
+`PolarisContextManager` 仍由 `agentscope.polaris.address` / `skill-address` 创建。
+把该 bean 接到 `HarnessAgent` / `ReActAgent` 上即可，方式和其它 `AgentSkillRepository` 一样。
 
 ### 说明
 
