@@ -63,7 +63,7 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     /**
      * Creates a mounted repository from a shared Polaris context using the server-active version.
      *
-     * @param context     shared Polaris context (must not be null)
+     * @param context shared Polaris context (must not be null)
      * @param serviceName the agent service name registered to Polaris (must not be blank)
      */
     public PolarisMountedSkillRepository(PolarisContextManager context, String serviceName) {
@@ -73,10 +73,10 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     /**
      * Creates a mounted repository from a shared Polaris context.
      *
-     * @param context     shared Polaris context (must not be null)
+     * @param context shared Polaris context (must not be null)
      * @param serviceName the agent service name registered to Polaris (must not be blank)
-     * @param version     fallback skill version when the mounted metadata carries none;
-     *                    blank means the server-active version
+     * @param version fallback skill version when the mounted metadata carries none;
+     *         blank means the server-active version
      */
     public PolarisMountedSkillRepository(
             PolarisContextManager context, String serviceName, String version) {
@@ -95,12 +95,12 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     /**
      * Test-only constructor that injects {@link SkillAPI} and {@link ConsumerAPI} directly.
      *
-     * @param skillAPI    the Polaris skill API (must not be null)
+     * @param skillAPI the Polaris skill API (must not be null)
      * @param consumerAPI the Polaris consumer API used to read service metadata (must not be null)
-     * @param namespace   the Polaris namespace (blank treated as {@code default})
+     * @param namespace the Polaris namespace (blank treated as {@code default})
      * @param serviceName the agent service name registered to Polaris (must not be blank)
-     * @param version     fallback skill version when the mounted metadata carries none;
-     *                    blank means the server-active version
+     * @param version fallback skill version when the mounted metadata carries none;
+     *         blank means the server-active version
      */
     PolarisMountedSkillRepository(
             SkillAPI skillAPI,
@@ -126,7 +126,7 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     /**
      * Builds a mounted repository from a shared Polaris context using the server-active version.
      *
-     * @param context     shared Polaris context
+     * @param context shared Polaris context
      * @param serviceName the agent service name registered to Polaris
      * @return a repository bound to {@code context}'s namespace
      */
@@ -138,10 +138,10 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     /**
      * Builds a mounted repository from a shared Polaris context.
      *
-     * @param context     shared Polaris context
+     * @param context shared Polaris context
      * @param serviceName the agent service name registered to Polaris
-     * @param version     fallback skill version when the mounted metadata carries none;
-     *                    blank means the server-active version
+     * @param version fallback skill version when the mounted metadata carries none;
+     *         blank means the server-active version
      * @return a repository bound to {@code context}'s namespace
      */
     public static PolarisMountedSkillRepository from(
@@ -158,7 +158,13 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
         refreshMountedIfNeeded();
         String mountedVersion = mountedSkills.get(trimmed);
         if (mountedVersion == null) {
+            if (log.isDebugEnabled()) {
+                log.debug("Skill {} is not mounted on {}/{}", trimmed, namespace, serviceName);
+            }
             throw new IllegalArgumentException("Skill not found: " + trimmed);
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("Loading mounted skill {} version={}", trimmed, mountedVersion);
         }
         return loadSkill(trimmed, mountedVersion);
     }
@@ -166,20 +172,36 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     @Override
     public List<String> getAllSkillNames() {
         refreshMountedIfNeeded();
-        return List.copyOf(mountedSkills.keySet());
+        List<String> names = List.copyOf(mountedSkills.keySet());
+        if (log.isDebugEnabled()) {
+            log.debug("Mounted skill names on {}/{}: {}", namespace, serviceName, names);
+        }
+        return names;
     }
 
     @Override
     public List<AgentSkill> getAllSkills() {
         refreshMountedIfNeeded();
+        if (log.isDebugEnabled()) {
+            log.debug("Loading {} mounted skill(s) from {}/{}",
+                    mountedSkills.size(), namespace, serviceName);
+        }
         List<AgentSkill> skills = new ArrayList<>();
         for (Map.Entry<String, String> mounted : mountedSkills.entrySet()) {
             try {
+                if (log.isDebugEnabled()) {
+                    log.debug("Loading mounted skill {} version={}",
+                            mounted.getKey(), mounted.getValue());
+                }
                 skills.add(loadSkill(mounted.getKey(), mounted.getValue()));
             } catch (RuntimeException e) {
                 log.warn("Failed to load mounted skill {} from Polaris, skipping: {}",
                         mounted.getKey(), e.getMessage());
             }
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("Loaded {}/{} mounted skill(s) from {}/{}",
+                    skills.size(), mountedSkills.size(), namespace, serviceName);
         }
         return List.copyOf(skills);
     }
@@ -209,15 +231,30 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
     private void refreshMountedIfNeeded() {
         if (!mountedSkills.isEmpty() && lastRefreshAtMs != 0
                 && System.currentTimeMillis() - lastRefreshAtMs < refreshIntervalMs) {
+            if (log.isDebugEnabled()) {
+                log.debug("Reusing mounted skill cache for {}/{} ({} skill(s))",
+                        namespace, serviceName, mountedSkills.size());
+            }
             return;
         }
         synchronized (refreshLock) {
             if (!mountedSkills.isEmpty() && lastRefreshAtMs != 0
                     && System.currentTimeMillis() - lastRefreshAtMs < refreshIntervalMs) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Reusing mounted skill cache for {}/{} ({} skill(s))",
+                            namespace, serviceName, mountedSkills.size());
+                }
                 return;
+            }
+            if (log.isDebugEnabled()) {
+                log.debug("Refreshing mounted skills for {}/{}", namespace, serviceName);
             }
             mountedSkills = loadMountedSkills();
             lastRefreshAtMs = System.currentTimeMillis();
+            if (log.isDebugEnabled()) {
+                log.debug("Mounted skill cache for {}/{} now has {} skill(s): {}",
+                        namespace, serviceName, mountedSkills.size(), mountedSkills.keySet());
+            }
         }
     }
 
@@ -230,6 +267,9 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
                     "Failed to load mounted skills from Polaris: " + serviceName, e);
         }
         if (service == null) {
+            if (log.isDebugEnabled()) {
+                log.debug("Service {}/{} not found, no mounted skills", namespace, serviceName);
+            }
             return Map.of();
         }
         return resolveMountedSkills(service, version);
@@ -239,21 +279,47 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
         GetServicesRequest req = new GetServicesRequest();
         req.setNamespace(namespace);
         req.setService(serviceName);
+        if (log.isDebugEnabled()) {
+            log.debug("Looking up service {}/{} for mounted skills", namespace, serviceName);
+        }
         ServicesResponse resp = consumerAPI.getServices(req);
         if (resp == null || resp.getServices() == null) {
+            if (log.isDebugEnabled()) {
+                log.debug("GetServices returned no services for {}/{}", namespace, serviceName);
+            }
             return null;
         }
         for (ServiceInfo info : resp.getServices()) {
             if (info != null && serviceName.equals(info.getService())) {
+                if (log.isDebugEnabled()) {
+                    int metaCount = info.getExtendedMetadata() == null
+                            ? 0 : info.getExtendedMetadata().size();
+                    log.debug("Found service {}/{} with {} extended metadata entries",
+                            namespace, serviceName, metaCount);
+                }
                 return info;
             }
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("Service {}/{} missing from GetServices result ({} entries)",
+                    namespace, serviceName, resp.getServices().size());
         }
         return null;
     }
 
-    private static Map<String, String> resolveMountedSkills(ServiceInfo service, String fallbackVersion) {
+    /**
+     * Reads mounted skills from {@code Service.extended_metadata}.
+     *
+     * <p>{@link ServiceProto.AgentSkill#getName()} is {@code namespace:skillName}. Only the first
+     * colon is the separator, so {@code skillName} itself may contain colons. Entries whose
+     * namespace does not match this repository are skipped.
+     */
+    private Map<String, String> resolveMountedSkills(ServiceInfo service, String fallbackVersion) {
         List<ServiceProto.ExtendedMetadata> metas = service.getExtendedMetadata();
         if (metas == null || metas.isEmpty()) {
+            if (log.isDebugEnabled()) {
+                log.debug("Service {}/{} has no extended metadata", namespace, serviceName);
+            }
             return Map.of();
         }
         LinkedHashMap<String, String> skills = new LinkedHashMap<>();
@@ -265,18 +331,66 @@ public class PolarisMountedSkillRepository extends PolarisSkillRepository {
             }
             ServiceProto.AgentSkill skill = meta.getAgentSkill();
             if (skill == null) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Skipping EXTENDED_METADATA_SKILL with empty agent_skill on {}/{}",
+                            namespace, serviceName);
+                }
                 continue;
             }
-            String name = skill.getName();
-            if (name == null || name.isBlank()) {
-                name = skill.getId();
+            MountedSkillRef ref = parseMountedSkillRef(skill);
+            if (ref == null) {
+                continue;
             }
-            if (name != null && !name.isBlank()) {
-                skills.putIfAbsent(name.trim(), resolveSkillVersion(skill, fallbackVersion));
+            if (!this.namespace.equals(ref.namespace())) {
+                log.warn("Mounted skill {} does not match repository namespace {}, skipping",
+                        ref.raw(), this.namespace);
+                continue;
+            }
+            String skillVersion = resolveSkillVersion(skill, fallbackVersion);
+            if (skills.putIfAbsent(ref.name(), skillVersion) == null) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Accepted mounted skill name={} namespace={} version={} raw={}",
+                            ref.name(), ref.namespace(), skillVersion, ref.raw());
+                }
+            } else if (log.isDebugEnabled()) {
+                log.debug("Duplicate mounted skill {}, keeping first version {}",
+                        ref.name(), skills.get(ref.name()));
             }
         }
         return Collections.unmodifiableMap(skills);
     }
+
+    /**
+     * Parses {@code namespace:skillName} from {@link ServiceProto.AgentSkill#getName()}, falling
+     * back to {@link ServiceProto.AgentSkill#getId()} when name is blank. Splits on the first
+     * colon so {@code skillName} may contain more colons.
+     */
+    private static MountedSkillRef parseMountedSkillRef(ServiceProto.AgentSkill skill) {
+        String raw = skill.getName();
+        if (raw == null || raw.isBlank()) {
+            raw = skill.getId();
+        }
+        if (raw == null || raw.isBlank()) {
+            log.error("Invalid skill identity in EXTENDED_METADATA_SKILL: blank name and id");
+            return null;
+        }
+        int colon = raw.indexOf(':');
+        if (colon < 0) {
+            log.error("Invalid skill name in EXTENDED_METADATA_SKILL, expected namespace:skillName: {}",
+                    raw);
+            return null;
+        }
+        String skillNamespace = raw.substring(0, colon).trim();
+        String skillName = raw.substring(colon + 1).trim();
+        if (skillNamespace.isEmpty() || skillName.isEmpty()) {
+            log.error("Invalid skill name in EXTENDED_METADATA_SKILL, expected namespace:skillName: {}",
+                    raw);
+            return null;
+        }
+        return new MountedSkillRef(skillNamespace, skillName, raw);
+    }
+
+    private record MountedSkillRef(String namespace, String name, String raw) {}
 
     /**
      * Version carried by the mounted {@link ServiceProto.AgentSkill} wins; when it is blank the

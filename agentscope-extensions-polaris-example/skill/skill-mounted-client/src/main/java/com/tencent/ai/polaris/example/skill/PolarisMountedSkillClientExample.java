@@ -76,6 +76,13 @@ public final class PolarisMountedSkillClientExample {
                                 + (changed ? " changed" : "")
                                 + " mounted=" + names);
                 lastNames = names;
+                for (String name : names) {
+                    repo.getSkill(name);
+                    System.out.println(
+                            LocalTime.now()
+                                    + " round=" + round
+                                    + " skill=" + name);
+                }
             } catch (RuntimeException e) {
                 System.out.println(
                         LocalTime.now()

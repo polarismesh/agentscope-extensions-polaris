@@ -63,7 +63,6 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     private static final int DEFAULT_LIST_LIMIT = 50;
     private static final int DEFAULT_MAX_SKILLS = 100;
     private static final long DEFAULT_LIST_REFRESH_INTERVAL_MS = 30_000L;
-    private static final String ACTIVE_VERSION = "active";
 
     private final SkillAPI skillAPI;
     private final String namespace;
@@ -101,13 +100,13 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     /**
      * Creates a repository from a shared Polaris context with list filters and cache settings.
      *
-     * @param context               shared Polaris context (must not be null)
-     * @param version               skill version; blank means the server-active version
-     * @param names                 if non-empty, only these skill names are loaded (List is skipped)
-     * @param listLimit             page size for ListSkills
-     * @param maxSkills             maximum skills to load from List
+     * @param context shared Polaris context (must not be null)
+     * @param version skill version; blank means the server-active version
+     * @param names if non-empty, only these skill names are loaded (List is skipped)
+     * @param listLimit page size for ListSkills
+     * @param maxSkills maximum skills to load from List
      * @param listRefreshIntervalMs reuse the last ListSkills result within this interval;
-     *                              zip cache is keyed by {@code name#version} and is not TTL-evicted
+     *         zip cache is keyed by {@code name#version} and is not TTL-evicted
      */
     public PolarisSkillRepository(
             PolarisContextManager context,
@@ -123,7 +122,7 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     /**
      * Test-only constructor that injects {@link SkillAPI} directly.
      *
-     * @param skillAPI  the Polaris skill API (must not be null)
+     * @param skillAPI the Polaris skill API (must not be null)
      * @param namespace the Polaris namespace (blank treated as {@code default})
      */
     PolarisSkillRepository(SkillAPI skillAPI, String namespace) {
@@ -133,9 +132,9 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     /**
      * Test-only constructor that injects {@link SkillAPI} and a fixed version.
      *
-     * @param skillAPI  the Polaris skill API (must not be null)
+     * @param skillAPI the Polaris skill API (must not be null)
      * @param namespace the Polaris namespace (blank treated as {@code default})
-     * @param version   skill version; blank means the server-active version
+     * @param version skill version; blank means the server-active version
      */
     PolarisSkillRepository(SkillAPI skillAPI, String namespace, String version) {
         this(skillAPI, namespace, version, List.of(), DEFAULT_LIST_LIMIT, DEFAULT_MAX_SKILLS,
@@ -145,14 +144,14 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     /**
      * Test-only constructor that injects {@link SkillAPI} with list filters and cache settings.
      *
-     * @param skillAPI              the Polaris skill API (must not be null)
-     * @param namespace             the Polaris namespace (blank treated as {@code default})
-     * @param version               skill version; blank means the server-active version
-     * @param names                 if non-empty, only these skill names are loaded (List is skipped)
-     * @param listLimit             page size for ListSkills
-     * @param maxSkills             maximum skills to load from List
+     * @param skillAPI the Polaris skill API (must not be null)
+     * @param namespace the Polaris namespace (blank treated as {@code default})
+     * @param version skill version; blank means the server-active version
+     * @param names if non-empty, only these skill names are loaded (List is skipped)
+     * @param listLimit page size for ListSkills
+     * @param maxSkills maximum skills to load from List
      * @param listRefreshIntervalMs reuse the last ListSkills result within this interval;
-     *                              zip cache is keyed by {@code name#version} and is not TTL-evicted
+     *         zip cache is keyed by {@code name#version} and is not TTL-evicted
      */
     PolarisSkillRepository(
             SkillAPI skillAPI,
@@ -212,15 +211,29 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     /**
      * Downloads a skill at an explicit version and builds an {@link AgentSkill} from its zip.
      *
-     * @param name         the skill name (must already be trimmed and non-blank)
+     * @param name the skill name (must already be trimmed and non-blank)
      * @param skillVersion skill version; blank means the server-active version
      * @return the downloaded skill
      */
     protected AgentSkill loadSkill(String name, String skillVersion) {
+        if (log.isDebugEnabled()) {
+            log.debug("Downloading skill {} namespace={} version={}",
+                    name, namespace, skillVersion);
+        }
         try {
             SkillDownloadResponse resp = downloadZip(name, skillVersion);
             if (isNotFound(resp) || resp.getZipContent() == null || resp.getZipContent().length == 0) {
-                throw new IllegalArgumentException("Skill not found: " + name);
+                if (log.isDebugEnabled()) {
+                    log.debug("Skill {} not found in namespace {} (code={}, zipBytes={})",
+                            name, namespace,
+                            resp == null ? -1 : resp.getCode(),
+                            resp == null || resp.getZipContent() == null ? 0 : resp.getZipContent().length);
+                }
+                throw new IllegalArgumentException("Skill not found, name : " + name + ", version: "+ skillVersion);
+            }
+            if (log.isDebugEnabled()) {
+                log.debug("Downloaded skill {} namespace={} zipBytes={} code={}",
+                        name, namespace, resp.getZipContent().length, resp.getCode());
             }
             return SkillUtil.createFromZip(
                     adaptZipForSkillUtil(resp.getZipContent(), name), getSource());
@@ -275,27 +288,43 @@ public class PolarisSkillRepository implements AgentSkillRepository {
         for (SkillRef ref : lastRefs) {
             names.add(ref.name());
         }
+        if (log.isDebugEnabled()) {
+            log.debug("Published skill names in namespace {}: {}", namespace, names);
+        }
         return List.copyOf(names);
     }
 
     @Override
     public List<AgentSkill> getAllSkills() {
         refreshRefsIfNeeded();
+        if (log.isDebugEnabled()) {
+            log.debug("Loading {} published skill(s) from namespace {}", lastRefs.size(), namespace);
+        }
         List<AgentSkill> skills = new ArrayList<>();
         for (SkillRef ref : lastRefs) {
             String key = cacheKey(ref);
             AgentSkill cached = skillCache.get(key);
             if (cached != null) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Using cached skill {}", key);
+                }
                 skills.add(cached);
                 continue;
             }
             try {
+                if (log.isDebugEnabled()) {
+                    log.debug("Cache miss for skill {}, downloading", key);
+                }
                 AgentSkill skill = getSkill(ref.name());
                 skillCache.put(key, skill);
                 skills.add(skill);
             } catch (RuntimeException e) {
                 log.warn("Failed to load skill {} from Polaris, skipping: {}", ref.name(), e.getMessage());
             }
+        }
+        if (log.isDebugEnabled()) {
+            log.debug("Loaded {}/{} published skill(s) from namespace {}",
+                    skills.size(), lastRefs.size(), namespace);
         }
         return List.copyOf(skills);
     }
@@ -320,19 +349,38 @@ public class PolarisSkillRepository implements AgentSkillRepository {
     private void refreshRefsIfNeeded() {
         if (!configuredNames.isEmpty()) {
             lastRefs = toConfiguredRefs();
+            if (log.isDebugEnabled()) {
+                log.debug("Using configured skill names in namespace {}: {}", namespace, configuredNames);
+            }
             return;
         }
         long now = System.currentTimeMillis();
         if (lastListAtMs != 0 && now - lastListAtMs < listRefreshIntervalMs) {
+            if (log.isDebugEnabled()) {
+                log.debug("Reusing skill list cache for namespace {} ({} skill(s))",
+                        namespace, lastRefs.size());
+            }
             return;
         }
         synchronized (listLock) {
             now = System.currentTimeMillis();
             if (lastListAtMs != 0 && now - lastListAtMs < listRefreshIntervalMs) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Reusing skill list cache for namespace {} ({} skill(s))",
+                            namespace, lastRefs.size());
+                }
                 return;
+            }
+            if (log.isDebugEnabled()) {
+                log.debug("Refreshing skill list for namespace {} limit={} maxSkills={}",
+                        namespace, listLimit, maxSkills);
             }
             lastRefs = listSkillRefs();
             lastListAtMs = System.currentTimeMillis();
+            if (log.isDebugEnabled()) {
+                log.debug("Skill list cache for namespace {} now has {} skill(s)",
+                        namespace, lastRefs.size());
+            }
         }
     }
 
@@ -355,6 +403,10 @@ public class PolarisSkillRepository implements AgentSkillRepository {
             req.setLimit(listLimit);
             SkillListResponse resp;
             try {
+                if (log.isDebugEnabled()) {
+                    log.debug("Listing skills namespace={} offset={} limit={}",
+                            namespace, offset, listLimit);
+                }
                 resp = skillAPI.listSkills(req);
             } catch (PolarisException e) {
                 throw new RuntimeException("Failed to list skills from Polaris", e);
@@ -362,6 +414,11 @@ public class PolarisSkillRepository implements AgentSkillRepository {
             if (isListFailure(resp)) {
                 String info = resp.getInfo() == null ? "" : resp.getInfo();
                 throw new RuntimeException("Failed to list skills from Polaris: " + info);
+            }
+            if (log.isDebugEnabled()) {
+                int pageSize = resp.getResources() == null ? 0 : resp.getResources().size();
+                log.debug("ListSkills namespace={} offset={} code={} total={} pageSize={}",
+                        namespace, offset, resp.getCode(), resp.getTotal(), pageSize);
             }
             List<SkillResource> resources = resp.getResources();
             if (resources == null || resources.isEmpty()) {
@@ -397,8 +454,8 @@ public class PolarisSkillRepository implements AgentSkillRepository {
 
     private static String cacheKey(SkillRef ref) {
         String resolved = ref.version();
-        if (resolved == null || resolved.isEmpty()) {
-            resolved = ACTIVE_VERSION;
+        if (resolved == null) {
+            resolved = "";
         }
         return ref.name() + "#" + resolved;
     }
@@ -416,6 +473,10 @@ public class PolarisSkillRepository implements AgentSkillRepository {
             req.setVersion(skillVersion);
         }
         req.setFormat(PolarisSkillConstants.FORMAT_ZIP);
+        if (log.isDebugEnabled()) {
+            log.debug("DownloadSkill namespace={} name={} version={} format={}",
+                    namespace, name, req.getVersion(), PolarisSkillConstants.FORMAT_ZIP);
+        }
         return skillAPI.downloadSkill(req);
     }
 
@@ -433,14 +494,30 @@ public class PolarisSkillRepository implements AgentSkillRepository {
         try {
             entries = readZipFileEntries(zipBytes);
         } catch (IOException | IllegalArgumentException e) {
+            if (log.isDebugEnabled()) {
+                log.debug("Leaving skill {} zip unchanged, failed to read entries: {}",
+                        skillName, e.getMessage());
+            }
             return zipBytes;
         }
         if (entries.isEmpty() || !hasRootLevelFile(entries)) {
+            if (log.isDebugEnabled()) {
+                log.debug("Skill {} zip already rooted or empty, entries={}",
+                        skillName, entries.size());
+            }
             return zipBytes;
         }
         try {
+            if (log.isDebugEnabled()) {
+                log.debug("Wrapping skill {} zip under {}/, entries={}",
+                        skillName, skillName, entries.size());
+            }
             return wrapEntriesUnder(entries, skillName);
         } catch (IOException e) {
+            if (log.isDebugEnabled()) {
+                log.debug("Leaving skill {} zip unchanged, wrap failed: {}",
+                        skillName, e.getMessage());
+            }
             return zipBytes;
         }
     }

@@ -131,7 +131,7 @@ class PolarisMountedSkillRepositoryTest {
     void getAllSkillNamesFallsBackToSkillIdWhenNameBlank() {
         ServiceProto.ExtendedMetadata meta = ServiceProto.ExtendedMetadata.newBuilder()
                 .setType(ServiceProto.ExtendedMetadata.ExtendedMetadataType.EXTENDED_METADATA_SKILL)
-                .setAgentSkill(ServiceProto.AgentSkill.newBuilder().setId("sql-analysis").build())
+                .setAgentSkill(ServiceProto.AgentSkill.newBuilder().setId("default:sql-analysis").build())
                 .build();
         when(consumerAPI.getServices(any())).thenReturn(servicesResponse(serviceWithMetadata(meta)));
 
@@ -152,6 +152,55 @@ class PolarisMountedSkillRepositoryTest {
 
         assertEquals(List.of(), repository.getAllSkillNames());
         verify(skillAPI, never()).downloadSkill(any());
+    }
+
+    @Test
+    void getAllSkillNamesSplitsNamespacePrefix() {
+        when(consumerAPI.getServices(any()))
+                .thenReturn(servicesResponse(serviceWithMountedNames("default:sql-analysis")));
+
+        assertEquals(List.of("sql-analysis"), repository.getAllSkillNames());
+    }
+
+    @Test
+    void getAllSkillNamesKeepsColonsInsideSkillName() {
+        when(consumerAPI.getServices(any()))
+                .thenReturn(servicesResponse(serviceWithMountedNames("default:svg:architecture:diagram")));
+
+        assertEquals(List.of("svg:architecture:diagram"), repository.getAllSkillNames());
+    }
+
+    @Test
+    void getAllSkillNamesSkipsDifferentNamespace() {
+        when(consumerAPI.getServices(any()))
+                .thenReturn(servicesResponse(serviceWithMountedNames(
+                        "default:sql-analysis", "prod:chart-rendering")));
+
+        assertEquals(List.of("sql-analysis"), repository.getAllSkillNames());
+    }
+
+    @Test
+    void getAllSkillNamesSkipsNameWithoutNamespacePrefix() {
+        when(consumerAPI.getServices(any()))
+                .thenReturn(servicesResponse(serviceWithMountedNames("sql-analysis")));
+
+        assertEquals(List.of(), repository.getAllSkillNames());
+    }
+
+    @Test
+    void getSkillDownloadsSkillNameWithColons() throws Exception {
+        when(consumerAPI.getServices(any()))
+                .thenReturn(servicesResponse(serviceWithMountedNames("default:svg:architecture:diagram")));
+        when(skillAPI.downloadSkill(any()))
+                .thenReturn(successZip("svg:architecture:diagram", "Draw SVG", "Use mermaid"));
+
+        AgentSkill skill = repository.getSkill("svg:architecture:diagram");
+
+        assertEquals("svg:architecture:diagram", skill.getName());
+        ArgumentCaptor<SkillDownloadRequest> captor = ArgumentCaptor.forClass(SkillDownloadRequest.class);
+        verify(skillAPI).downloadSkill(captor.capture());
+        assertEquals("svg:architecture:diagram", captor.getValue().getName());
+        assertEquals("default", captor.getValue().getNamespace());
     }
 
     @Test
@@ -215,7 +264,8 @@ class PolarisMountedSkillRepositoryTest {
     @Test
     void getAllSkillsUsePerSkillMountedVersions() throws Exception {
         when(consumerAPI.getServices(any())).thenReturn(servicesResponse(serviceWithMetadata(
-                skillMetadata("sql-analysis", "2.3.0"), skillMetadata("chart-rendering", "0.9.1"))));
+                skillMetadata("default:sql-analysis", "2.3.0"),
+                skillMetadata("default:chart-rendering", "0.9.1"))));
         when(skillAPI.downloadSkill(any())).thenAnswer(inv -> {
             SkillDownloadRequest req = inv.getArgument(0);
             return successZip(req.getName(), req.getName() + " desc", "body");
@@ -301,13 +351,21 @@ class PolarisMountedSkillRepositoryTest {
     private static ServiceInfo serviceWithSkills(String... names) {
         ServiceProto.ExtendedMetadata[] metas = new ServiceProto.ExtendedMetadata[names.length];
         for (int i = 0; i < names.length; i++) {
-            metas[i] = skillMetadata(names[i], "");
+            metas[i] = skillMetadata("default:" + names[i], "");
+        }
+        return serviceWithMetadata(metas);
+    }
+
+    private static ServiceInfo serviceWithMountedNames(String... mountedNames) {
+        ServiceProto.ExtendedMetadata[] metas = new ServiceProto.ExtendedMetadata[mountedNames.length];
+        for (int i = 0; i < mountedNames.length; i++) {
+            metas[i] = skillMetadata(mountedNames[i], "");
         }
         return serviceWithMetadata(metas);
     }
 
     private static ServiceInfo serviceWithSkill(String name, String version) {
-        return serviceWithMetadata(skillMetadata(name, version));
+        return serviceWithMetadata(skillMetadata("default:" + name, version));
     }
 
     private static ServiceProto.ExtendedMetadata skillMetadata(String name, String version) {
