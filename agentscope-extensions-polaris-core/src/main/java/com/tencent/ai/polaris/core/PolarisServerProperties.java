@@ -34,6 +34,8 @@ public class PolarisServerProperties {
     public static final String DEFAULT_ADDRESS = "127.0.0.1:8091";
     public static final String DEFAULT_NAMESPACE = "default";
 
+    /** When {@code false}, Spring Boot auto-config skips creating {@code PolarisContextManager}. */
+    private boolean enabled = true;
     private String address;
     private String namespace = DEFAULT_NAMESPACE;
     private String token;
@@ -43,6 +45,14 @@ public class PolarisServerProperties {
 
     public PolarisServerProperties(String address) {
         this.address = address;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
 
     public String getAddress() {

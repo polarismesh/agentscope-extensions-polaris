@@ -27,9 +27,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <pre>{@code
  * agentscope:
  *   polaris:
+ *     enabled: true
  *     address: 127.0.0.1:8091
  *     namespace: default
- *     token: <token>
+ *     token: <service_token>
  * }</pre>
  */
 @ConfigurationProperties(prefix = PolarisConstants.POLARIS_PREFIX)

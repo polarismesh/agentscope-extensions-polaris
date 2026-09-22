@@ -41,10 +41,10 @@ public final class AgentCardCodec {
         try {
             agentCard = Utils.unmarshalFrom(json, CARD_TYPE);
         } catch (Exception e) {
-            throw new IllegalArgumentException("Failed to deserialize AgentCard from metadata: " + e.getMessage(), e);
+            throw new IllegalArgumentException("Failed to deserialize AgentCard JSON: " + e.getMessage(), e);
         }
         if (agentCard == null) {
-            throw new IllegalArgumentException("Failed to deserialize AgentCard from metadata: decoded value is null");
+            throw new IllegalArgumentException("Failed to deserialize AgentCard JSON: decoded value is null");
         }
         return agentCard;
     }

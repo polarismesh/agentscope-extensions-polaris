@@ -31,7 +31,8 @@
     <description>Spring Boot starter for integrating AgentScope Java and PolarisMesh</description>
 
     <properties>
-        <spring.boot.version>4.0.3</spring.boot.version>
+        <!-- Compile against Boot 3.2 so Boot 3 users can consume the starter; examples may use Boot 4. -->
+        <spring.boot.version>3.2.12</spring.boot.version>
     </properties>
 
     <dependencyManagement>

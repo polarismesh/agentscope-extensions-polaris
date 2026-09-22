@@ -17,9 +17,9 @@
 package com.tencent.ai.polaris.a2a.registry;
 
 import static com.tencent.ai.polaris.a2a.constant.PolarisA2aConstants.META_AGENT_NAME;
+import static com.tencent.ai.polaris.a2a.constant.PolarisA2aConstants.WELL_KNOWN_AGENT_CARD_PATH;
 
 import com.tencent.ai.polaris.a2a.constant.PolarisA2aConstants;
-import com.tencent.ai.polaris.a2a.util.AgentCardCodec;
 import com.tencent.ai.polaris.core.PolarisContextManager;
 import io.a2a.spec.AgentCard;
 import io.agentscope.core.a2a.server.registry.AgentRegistry;
@@ -43,14 +43,17 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * AgentScope A2A registry backed by polaris-java.
  *
  * <p>Each A2A agent maps to a Polaris service named after {@link AgentCard#name()};
- * each exported transport maps to one Polaris instance. The full AgentCard JSON is
- * stored in instance metadata under {@link PolarisA2aConstants#META_AGENT_CARD} so the
- * discovery side can rebuild it without per-field mapping.
+ * each exported transport maps to one Polaris instance. Instance metadata stores only
+ * locator fields (card URL, transport, path) — not the full AgentCard JSON — because
+ * Polaris metadata is size-limited (~1–2KB). Discovery HTTP-fetches the card from
+ * {@link PolarisA2aConstants#META_AGENT_CARD_URL}.
  *
  * <p>Heartbeat is handled by {@code ProviderAPI.registerInstance} (autoHeartbeat=true,
- * ttl defaults to {@link PolarisA2aConstants#DEFAULT_TTL_SECONDS}). The AgentScope SPI
- * has no deregister hook, so this class implements {@link AutoCloseable} and records
- * registered instances for shutdown cleanup.
+ * ttl defaults to {@link PolarisA2aConstants#DEFAULT_TTL_SECONDS}). Register/deregister
+ * set the Polaris <em>service_token</em> via {@code setToken} when configured (distinct
+ * from the connector {@code X-Polaris-Token}). The AgentScope SPI has no deregister
+ * hook, so this class implements {@link AutoCloseable} and records registered instances
+ * for shutdown cleanup.
  */
 public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
 
@@ -59,16 +62,23 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
     private final ProviderAPI providerAPI;
     private final String namespace;
     private final int ttl;
+    private final String serviceToken;
     private final CopyOnWriteArrayList<RegisteredInstance> registered = new CopyOnWriteArrayList<>();
 
     public PolarisAgentRegistry(PolarisContextManager context) {
-        this(context.providerAPI(), context.getNamespace(), PolarisA2aConstants.DEFAULT_TTL_SECONDS);
+        this(context.providerAPI(), context.getNamespace(), PolarisA2aConstants.DEFAULT_TTL_SECONDS,
+                tokenOrNull(context));
     }
 
     PolarisAgentRegistry(ProviderAPI providerAPI, String namespace, int ttl) {
+        this(providerAPI, namespace, ttl, null);
+    }
+
+    PolarisAgentRegistry(ProviderAPI providerAPI, String namespace, int ttl, String serviceToken) {
         this.providerAPI = Objects.requireNonNull(providerAPI, "providerAPI");
         this.namespace = Objects.requireNonNull(namespace, "namespace");
         this.ttl = ttl;
+        this.serviceToken = blankToNull(serviceToken);
     }
 
     @Override
@@ -83,7 +93,6 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
             throw new IllegalArgumentException("transports must not be empty for agent: " + agentCard.name());
         }
         String service = agentCard.name();
-        String cardJson = AgentCardCodec.toJson(agentCard);
         List<RegisteredInstance> registeredThisCall = new ArrayList<>();
 
         try {
@@ -101,8 +110,11 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
                 req.setProtocol(resolveProtocol(tp));
                 req.setTtl(ttl);
                 req.setAutoHeartbeat(true);
-                Map<String, String> meta = buildMetadata(cardJson, tp);
-                meta.put(PolarisA2aConstants.META_AGENT_NAME, agentCard.name());
+                if (serviceToken != null) {
+                    req.setToken(serviceToken);
+                }
+                Map<String, String> meta = buildMetadata(agentCard, tp);
+                meta.put(META_AGENT_NAME, agentCard.name());
                 req.setMetadata(meta);
 
                 InstanceRegisterResponse resp = providerAPI.registerInstance(req);
@@ -127,10 +139,9 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
         deregister(instances);
     }
 
-    private static Map<String, String> buildMetadata(String cardJson, TransportProperties tp) {
+    static Map<String, String> buildMetadata(AgentCard agentCard, TransportProperties tp) {
         Map<String, String> meta = new HashMap<>();
-
-        meta.put(PolarisA2aConstants.META_AGENT_CARD, cardJson);
+        meta.put(PolarisA2aConstants.META_AGENT_CARD_URL, resolveAgentCardUrl(agentCard, tp));
         if (tp.transportType() != null) {
             meta.put(PolarisA2aConstants.META_TRANSPORT, tp.transportType());
         }
@@ -138,6 +149,23 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
             meta.put(PolarisA2aConstants.META_PATH, tp.path());
         }
         return meta;
+    }
+
+    /**
+     * Prefer {@link AgentCard#url()} when it already points at an AgentCard document
+     * ({@code *agent-card.json}); otherwise build the well-known URL from the transport.
+     */
+    static String resolveAgentCardUrl(AgentCard agentCard, TransportProperties tp) {
+        String cardUrl = agentCard.url();
+        if (cardUrl != null && !cardUrl.isBlank() && cardUrl.contains("agent-card.json")) {
+            return cardUrl;
+        }
+        Integer port = tp.port();
+        if (port == null) {
+            throw new IllegalArgumentException(
+                    "transport port must not be null when building agent card URL for agent: " + agentCard.name());
+        }
+        return resolveProtocol(tp) + "://" + tp.host() + ":" + port + WELL_KNOWN_AGENT_CARD_PATH;
     }
 
     private static String resolveProtocol(TransportProperties tp) {
@@ -160,6 +188,9 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
             if (ri.instanceId() != null) {
                 req.setInstanceID(ri.instanceId());
             }
+            if (serviceToken != null) {
+                req.setToken(serviceToken);
+            }
             try {
                 providerAPI.deRegister(req);
                 registered.remove(ri);
@@ -181,6 +212,20 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
         return new Builder(context);
     }
 
+    private static String tokenOrNull(PolarisContextManager context) {
+        if (context.getProperties() == null) {
+            return null;
+        }
+        return blankToNull(context.getProperties().getToken());
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
+    }
+
     public static final class Builder {
 
         private final PolarisContextManager context;
@@ -196,7 +241,8 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
         }
 
         public PolarisAgentRegistry build() {
-            return new PolarisAgentRegistry(context.providerAPI(), context.getNamespace(), ttl);
+            return new PolarisAgentRegistry(
+                    context.providerAPI(), context.getNamespace(), ttl, tokenOrNull(context));
         }
     }
 

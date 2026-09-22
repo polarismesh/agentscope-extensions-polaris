@@ -59,9 +59,9 @@ import java.util.concurrent.CountDownLatch;
  *   <li>{@code A2A_AGENT_NAME} — agent (Polaris service) name, default {@code polaris-a2a-example-agent}</li>
  *   <li>{@code A2A_SERVER_HOST} — exported host written into the card, default {@code localhost}</li>
  *   <li>{@code A2A_SERVER_PORT} — HTTP listen port, default {@code 8888}</li>
- *   <li>{@code OPENAI_API_KEY} — required, LLM api key</li>
- *   <li>{@code OPENAI_BASE_URL} — default {@code https://api.openai.com/v1}</li>
- *   <li>{@code OPENAI_MODEL} — default {@code gpt-4o-mini}</li>
+ *   <li>{@code TOKEN_HUB_API_KEY} — required, LLM api key</li>
+ *   <li>{@code TOKEN_HUB_BASE_URL} — default {@code https://api.openai.com/v1}</li>
+ *   <li>{@code OPENAI_MODEL} — default {@code deepseek-v4-flash}</li>
  * </ul>
  *
  * <p>Once running, verify with curl:

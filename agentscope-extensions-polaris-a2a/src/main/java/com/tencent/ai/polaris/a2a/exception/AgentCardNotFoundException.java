@@ -14,12 +14,12 @@
  * specific language governing permissions and limitations under the License.
  */
 
-package com.tencent.ai.polaris.a2a.discovery;
+package com.tencent.ai.polaris.a2a.exception;
 
 /**
  * Thrown when an {@link io.a2a.spec.AgentCard} cannot be resolved for the given agent
- * name — either the service has no instances in polaris, or none carry the serialized
- * card in metadata.
+ * name — either the service has no usable instances in polaris, or every candidate
+ * failed URL / HTTP / decode checks.
  */
 public class AgentCardNotFoundException extends RuntimeException {
 

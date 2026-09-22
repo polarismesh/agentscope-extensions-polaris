@@ -63,6 +63,20 @@ class AgentscopePolarisAutoConfigurationTest {
     }
 
     @Test
+    void shouldNotCreateContextWhenPolarisDisabled() {
+        try (MockedConstruction<PolarisContextManager> ignored = Mockito.mockConstruction(PolarisContextManager.class)) {
+            runner.withPropertyValues(
+                            "agentscope.polaris.enabled=false",
+                            "agentscope.polaris.address=127.0.0.1:8091")
+                    .run(context -> {
+                        assertThat(context).doesNotHaveBean(PolarisContextManager.class);
+                        assertThat(context).doesNotHaveBean(AgentRegistry.class);
+                        assertThat(context).doesNotHaveBean(AgentCardResolver.class);
+                    });
+        }
+    }
+
+    @Test
     void shouldNotCreateContextWhenAddressMissing() {
         runner.run(context -> {
             assertThat(context).doesNotHaveBean(PolarisContextManager.class);
@@ -141,6 +155,7 @@ class AgentscopePolarisAutoConfigurationTest {
                 PolarisContextManager.class,
                 (mock, construction) -> {
                     when(mock.getNamespace()).thenReturn("default");
+                    when(mock.getProperties()).thenReturn(new com.tencent.ai.polaris.core.PolarisServerProperties());
                     when(mock.providerAPI())
                             .thenReturn(mock(com.tencent.polaris.api.core.ProviderAPI.class));
                     when(mock.consumerAPI())
@@ -190,6 +205,7 @@ class AgentscopePolarisAutoConfigurationTest {
     private static PolarisContextManager stubContextManager() {
         PolarisContextManager ctx = mock(PolarisContextManager.class);
         when(ctx.getNamespace()).thenReturn("default");
+        when(ctx.getProperties()).thenReturn(new com.tencent.ai.polaris.core.PolarisServerProperties());
         when(ctx.providerAPI()).thenReturn(mock(com.tencent.polaris.api.core.ProviderAPI.class));
         when(ctx.consumerAPI()).thenReturn(mock(com.tencent.polaris.api.core.ConsumerAPI.class));
         return ctx;

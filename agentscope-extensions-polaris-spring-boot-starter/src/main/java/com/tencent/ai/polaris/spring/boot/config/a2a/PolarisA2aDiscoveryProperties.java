@@ -25,10 +25,14 @@ public class PolarisA2aDiscoveryProperties {
     private boolean enabled = true;
 
     /**
-     * Cache refresh interval in milliseconds. {@code 0} (default) = the card is fetched once and cached.
-     * {@code >0} = a stale entry is refreshed from Polaris on the next lookup.
+     * Cache refresh interval in milliseconds.
+     * <ul>
+     *   <li>{@code >0} (default {@code 30000}) — TTL; stale entries refresh on next lookup</li>
+     *   <li>{@code 0} — fetch every call (no cache)</li>
+     *   <li>{@code <0} — cache forever until invalidate</li>
+     * </ul>
      */
-    private long refreshIntervalMs = 0;
+    private long refreshIntervalMs = 30_000L;
 
     public boolean isEnabled() {
         return enabled;

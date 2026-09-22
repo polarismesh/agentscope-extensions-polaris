@@ -35,7 +35,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -87,11 +87,11 @@ class PolarisAgentRegistryTest {
     }
 
     @Test
-    void register_mapsCardAndTransportToInstanceRequest() throws PolarisException {
+    void register_mapsLocatorMetadataAndServiceToken() throws PolarisException {
         when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
                 .thenReturn(new InstanceRegisterResponse("inst-1", false));
 
-        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5);
+        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5, "svc-token");
         AgentCard card = buildCard("weather-agent", "1.0.0");
         List<TransportProperties> transports = List.of(
                 buildTransport("JSONRPC", "10.0.0.1", 8080, false),
@@ -111,17 +111,49 @@ class PolarisAgentRegistryTest {
         assertEquals("http", first.getProtocol());
         assertTrue(first.isAutoHeartbeat());
         assertEquals(5, first.getTtl());
-        assertNotNull(first.getMetadata().get("a2a.agent.card"));
+        assertEquals("svc-token", first.getToken());
+        assertNull(first.getMetadata().get("a2a.agent.card"));
+        assertEquals(
+                "http://10.0.0.1:8080/.well-known/agent-card.json",
+                first.getMetadata().get("a2a.agent.card.url"));
         assertEquals("JSONRPC", first.getMetadata().get("a2a.transport"));
         assertEquals("/", first.getMetadata().get("a2a.path"));
+        assertEquals("weather-agent", first.getMetadata().get("ai-agent-name"));
 
         InstanceRegisterRequest second = requests.get(1);
         assertEquals(8443, second.getPort());
         assertEquals("https", second.getProtocol());
+        assertEquals(
+                "https://10.0.0.1:8443/.well-known/agent-card.json",
+                second.getMetadata().get("a2a.agent.card.url"));
         assertEquals("HTTP+JSON", second.getMetadata().get("a2a.transport"));
 
         assertEquals(2, registry.getRegistered().size());
         assertEquals("inst-1", registry.getRegistered().get(0).instanceId());
+    }
+
+    @Test
+    void register_usesAbsoluteCardUrlWhenAlreadyAgentCardDocument() throws PolarisException {
+        when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
+                .thenReturn(new InstanceRegisterResponse("inst-1", false));
+        AgentCard card = new AgentCard.Builder()
+                .name("weather-agent")
+                .description("weather-agent")
+                .version("1.0.0")
+                .url("https://cdn.example.com/cards/weather-agent-card.json")
+                .capabilities(new AgentCapabilities(false, false, false, List.of()))
+                .defaultInputModes(List.of("text"))
+                .defaultOutputModes(List.of("text"))
+                .skills(List.of())
+                .build();
+
+        new PolarisAgentRegistry(providerAPI, NAMESPACE, 5)
+                .register(card, List.of(buildTransport("JSONRPC", "10.0.0.1", 8080, false)));
+
+        verify(providerAPI).registerInstance(registerCaptor.capture());
+        assertEquals(
+                "https://cdn.example.com/cards/weather-agent-card.json",
+                registerCaptor.getValue().getMetadata().get("a2a.agent.card.url"));
     }
 
     @Test
@@ -137,7 +169,7 @@ class PolarisAgentRegistryTest {
         when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
                 .thenReturn(new InstanceRegisterResponse("inst-first", false))
                 .thenThrow(new PolarisException(ErrorCode.API_INVALID_ARGUMENT, "second failed"));
-        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5);
+        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5, "tok");
 
         assertThrows(IllegalStateException.class, () -> registry.register(
                 buildCard("echo", "2.0"),
@@ -147,6 +179,7 @@ class PolarisAgentRegistryTest {
 
         verify(providerAPI).deRegister(deregisterCaptor.capture());
         assertEquals("inst-first", deregisterCaptor.getValue().getInstanceID());
+        assertEquals("tok", deregisterCaptor.getValue().getToken());
         assertTrue(registry.getRegistered().isEmpty());
         registry.close();
     }

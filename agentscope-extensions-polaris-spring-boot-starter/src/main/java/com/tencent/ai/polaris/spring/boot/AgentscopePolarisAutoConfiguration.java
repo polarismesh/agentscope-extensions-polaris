@@ -20,10 +20,12 @@ import com.tencent.ai.polaris.core.PolarisContextManager;
 import com.tencent.ai.polaris.spring.boot.config.AgentScopePolarisProperties;
 import com.tencent.ai.polaris.spring.boot.constants.PolarisConstants;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.AllNestedConditions;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 
 /**
  * Shared Polaris connection auto-configuration for AgentScope.
@@ -31,6 +33,9 @@ import org.springframework.context.annotation.Bean;
  * <p>Connection settings come from {@code agentscope.polaris} and produce a shared
  * {@link PolarisContextManager}. Feature beans (A2A, later skill/MCP) live in their own
  * {@code @AutoConfiguration} classes ordered after this one.
+ *
+ * <p>{@code agentscope.polaris.enabled=false} (matchIfMissing {@code true}) skips creating
+ * the context bean even when {@code address} is set.
  */
 @AutoConfiguration
 @EnableConfigurationProperties(AgentScopePolarisProperties.class)
@@ -43,9 +48,32 @@ public class AgentscopePolarisAutoConfiguration {
      * @return a context that is closed with the application context
      */
     @Bean(destroyMethod = "close")
-    @ConditionalOnProperty(prefix = PolarisConstants.POLARIS_PREFIX, name = "address")
+    @Conditional(OnPolarisContextEnabled.class)
     @ConditionalOnMissingBean
     public PolarisContextManager polarisContextManager(AgentScopePolarisProperties properties) {
         return new PolarisContextManager(properties);
+    }
+
+    /**
+     * Both {@code agentscope.polaris.enabled} (default true) and {@code address} must be set.
+     * Nested because {@code @ConditionalOnProperty} is not repeatable on Spring Boot 3.2.
+     */
+    static final class OnPolarisContextEnabled extends AllNestedConditions {
+
+        OnPolarisContextEnabled() {
+            super(ConfigurationPhase.REGISTER_BEAN);
+        }
+
+        @ConditionalOnProperty(
+                prefix = PolarisConstants.POLARIS_PREFIX,
+                name = "enabled",
+                havingValue = "true",
+                matchIfMissing = true)
+        static final class Enabled {
+        }
+
+        @ConditionalOnProperty(prefix = PolarisConstants.POLARIS_PREFIX, name = "address")
+        static final class AddressPresent {
+        }
     }
 }

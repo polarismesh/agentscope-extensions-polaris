@@ -34,4 +34,10 @@
     <modules>
         <module>a2a</module>
     </modules>
+
+    <!-- Keep examples in the reactor / CI, but never publish them to Maven Central. -->
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <gpg.skip>true</gpg.skip>
+    </properties>
 </project>

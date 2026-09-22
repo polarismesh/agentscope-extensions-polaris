@@ -17,6 +17,7 @@
 package com.tencent.ai.polaris.a2a.discovery;
 
 import com.tencent.ai.polaris.a2a.constant.PolarisA2aConstants;
+import com.tencent.ai.polaris.a2a.exception.AgentCardNotFoundException;
 import com.tencent.ai.polaris.a2a.util.AgentCardCodec;
 import com.tencent.ai.polaris.core.PolarisContextManager;
 import io.a2a.spec.AgentCard;
@@ -29,6 +30,7 @@ import com.tencent.polaris.api.rpc.InstancesResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,13 +39,20 @@ import java.util.function.LongSupplier;
 /**
  * AgentScope A2A card resolver backed by polaris-java.
  *
- * <p>Uses a pull model: {@link #getAgentCard(String)} looks up the cached card, and
- * on miss fetches all instances of the service named after the agent via
- * {@code ConsumerAPI.getAllInstances}, then reads the serialized card from the first
- * instance whose metadata carries {@link PolarisA2aConstants#META_AGENT_CARD}.
+ * <p>Uses a pull model: {@link #getAgentCard(String)} looks up healthy, non-isolated
+ * instances of the service named after the agent via {@code ConsumerAPI.getAllInstances},
+ * reads {@link PolarisA2aConstants#META_AGENT_CARD_URL} from metadata, and HTTP-fetches
+ * the AgentCard JSON.
  *
- * <p>Push via {@code LocalRegistry.registerResourceListener} is a v2 enhancement; the
- * {@link AgentCardResolver} interface stays unchanged so the upgrade is transparent.
+ * <p>Cache semantics for {@code refreshIntervalMs}:
+ * <ul>
+ *   <li>{@code >0} — TTL; refresh runs outside {@link ConcurrentHashMap} compute locks</li>
+ *   <li>{@code 0} — fetch every call (no cache)</li>
+ *   <li>{@code <0} — cache forever until {@link #invalidate(String)}</li>
+ * </ul>
+ * On TTL refresh failure the previous entry is kept. A true miss throws
+ * {@link AgentCardNotFoundException}; Polaris SDK / network errors throw
+ * {@link IllegalStateException}.
  */
 public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseable {
 
@@ -53,42 +62,82 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
     private final String namespace;
     private final long refreshIntervalMs;
     private final LongSupplier currentTimeMillis;
+    private final AgentCardHttpClient httpClient;
     private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public PolarisAgentCardResolver(PolarisContextManager context) {
-        this(context.consumerAPI(), context.getNamespace(), 0, System::currentTimeMillis);
+        this(context.consumerAPI(), context.getNamespace(),
+                PolarisA2aConstants.DEFAULT_REFRESH_INTERVAL_MS, System::currentTimeMillis,
+                AgentCardHttpClient.jdkDefault());
     }
 
     PolarisAgentCardResolver(ConsumerAPI consumerAPI, String namespace) {
-        this(consumerAPI, namespace, 0, System::currentTimeMillis);
+        this(consumerAPI, namespace, PolarisA2aConstants.DEFAULT_REFRESH_INTERVAL_MS,
+                System::currentTimeMillis, AgentCardHttpClient.jdkDefault());
     }
 
     PolarisAgentCardResolver(
-            ConsumerAPI consumerAPI, String namespace, long refreshIntervalMs, LongSupplier currentTimeMillis) {
+            ConsumerAPI consumerAPI,
+            String namespace,
+            long refreshIntervalMs,
+            LongSupplier currentTimeMillis) {
+        this(consumerAPI, namespace, refreshIntervalMs, currentTimeMillis, AgentCardHttpClient.jdkDefault());
+    }
+
+    PolarisAgentCardResolver(
+            ConsumerAPI consumerAPI,
+            String namespace,
+            long refreshIntervalMs,
+            LongSupplier currentTimeMillis,
+            AgentCardHttpClient httpClient) {
         this.consumerAPI = Objects.requireNonNull(consumerAPI, "consumerAPI");
         this.namespace = Objects.requireNonNull(namespace, "namespace");
         this.refreshIntervalMs = refreshIntervalMs;
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
+        this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
     }
 
     @Override
     public AgentCard getAgentCard(String agentName) {
         Objects.requireNonNull(agentName, "agentName");
-        if (refreshIntervalMs <= 0) {
-            return cache.computeIfAbsent(agentName, this::fetchEntry).card();
+        if (refreshIntervalMs == 0) {
+            return fetchFromPolaris(agentName);
         }
-        long now = currentTimeMillis.getAsLong();
-        return cache.compute(agentName, (name, current) -> {
-            if (current == null || now - current.fetchedAtMs() >= refreshIntervalMs) {
-                AgentCard card = fetchFromPolaris(name);
-                return new CacheEntry(card, currentTimeMillis.getAsLong());
-            }
-            return current;
-        }).card();
+        if (refreshIntervalMs < 0) {
+            return getOrLoadForever(agentName);
+        }
+        return getOrRefreshTtl(agentName);
     }
 
-    private CacheEntry fetchEntry(String agentName) {
-        return new CacheEntry(fetchFromPolaris(agentName), currentTimeMillis.getAsLong());
+    private AgentCard getOrLoadForever(String agentName) {
+        CacheEntry existing = cache.get(agentName);
+        if (existing != null) {
+            return existing.card();
+        }
+        AgentCard card = fetchFromPolaris(agentName);
+        CacheEntry created = new CacheEntry(card, currentTimeMillis.getAsLong());
+        CacheEntry raced = cache.putIfAbsent(agentName, created);
+        return raced != null ? raced.card() : card;
+    }
+
+    private AgentCard getOrRefreshTtl(String agentName) {
+        CacheEntry current = cache.get(agentName);
+        long now = currentTimeMillis.getAsLong();
+        if (current != null && now - current.fetchedAtMs() < refreshIntervalMs) {
+            return current.card();
+        }
+        try {
+            AgentCard card = fetchFromPolaris(agentName);
+            cache.put(agentName, new CacheEntry(card, currentTimeMillis.getAsLong()));
+            return card;
+        } catch (RuntimeException e) {
+            if (current != null) {
+                log.warn("Failed to refresh AgentCard for '{}'; keeping cached entry: {}",
+                        agentName, e.getMessage());
+                return current.card();
+            }
+            throw e;
+        }
     }
 
     private AgentCard fetchFromPolaris(String agentName) {
@@ -100,41 +149,59 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
         try {
             resp = consumerAPI.getAllInstances(req);
         } catch (PolarisException e) {
-            throw new AgentCardNotFoundException(agentName, e);
+            throw new IllegalStateException(
+                    "Failed to discover agent '" + agentName + "' from polaris: " + e.getMessage(), e);
         }
         Instance[] instances = resp.getInstances();
         if (instances == null) {
             throw new AgentCardNotFoundException(agentName);
         }
         for (Instance inst : instances) {
-            if (!inst.isHealthy()) {
+            if (!inst.isHealthy() || inst.isIsolated()) {
                 continue;
             }
             Map<String, String> metadata = inst.getMetadata();
             if (metadata == null) {
                 continue;
             }
-            String json = metadata.get(PolarisA2aConstants.META_AGENT_CARD);
-            if (json != null) {
-                AgentCard card;
-                try {
-                    card = AgentCardCodec.fromJson(json);
-                } catch (IllegalArgumentException e) {
-                    log.warn("Skipping malformed agent card for '{}' from instance {}:{}",
-                            agentName, inst.getHost(), inst.getPort(), e);
-                    continue;
-                }
-                if (card.name() != null && !agentName.equals(card.name())) {
-                    log.warn("Skipping agent card named '{}' while resolving '{}' from instance {}:{}",
-                            card.name(), agentName, inst.getHost(), inst.getPort());
-                    continue;
-                }
-                log.debug("Resolved agent '{}' card from instance {}:{}",
-                        agentName, inst.getHost(), inst.getPort());
-                return card;
+            String cardUrl = metadata.get(PolarisA2aConstants.META_AGENT_CARD_URL);
+            if (cardUrl == null || cardUrl.isBlank()) {
+                continue;
             }
+            if (!isHttpUrl(cardUrl)) {
+                log.warn("Skipping invalid agent card URL '{}' for '{}' from instance {}:{}",
+                        cardUrl, agentName, inst.getHost(), inst.getPort());
+                continue;
+            }
+            String json;
+            try {
+                json = httpClient.get(cardUrl);
+            } catch (IOException e) {
+                log.warn("Skipping agent '{}' card fetch from {} (instance {}:{}): {}",
+                        agentName, cardUrl, inst.getHost(), inst.getPort(), e.getMessage());
+                continue;
+            }
+            AgentCard card;
+            try {
+                card = AgentCardCodec.fromJson(json);
+            } catch (IllegalArgumentException e) {
+                log.warn("Skipping malformed agent card for '{}' from {}: {}",
+                        agentName, cardUrl, e.getMessage());
+                continue;
+            }
+            if (card.name() != null && !agentName.equals(card.name())) {
+                log.warn("Skipping agent card named '{}' while resolving '{}' from {}",
+                        card.name(), agentName, cardUrl);
+                continue;
+            }
+            log.debug("Resolved agent '{}' card from {}", agentName, cardUrl);
+            return card;
         }
         throw new AgentCardNotFoundException(agentName);
+    }
+
+    private static boolean isHttpUrl(String url) {
+        return url.startsWith("http://") || url.startsWith("https://");
     }
 
     /** Drop the cached card so the next lookup re-fetches from polaris. */
@@ -159,7 +226,7 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
     public static final class Builder {
 
         private final PolarisContextManager context;
-        private long refreshIntervalMs;
+        private long refreshIntervalMs = PolarisA2aConstants.DEFAULT_REFRESH_INTERVAL_MS;
 
         private Builder(PolarisContextManager context) {
             this.context = Objects.requireNonNull(context, "context");
@@ -172,7 +239,11 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
 
         public PolarisAgentCardResolver build() {
             return new PolarisAgentCardResolver(
-                    context.consumerAPI(), context.getNamespace(), refreshIntervalMs, System::currentTimeMillis);
+                    context.consumerAPI(),
+                    context.getNamespace(),
+                    refreshIntervalMs,
+                    System::currentTimeMillis,
+                    AgentCardHttpClient.jdkDefault());
         }
     }
 
