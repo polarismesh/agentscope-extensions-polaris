@@ -35,7 +35,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -87,7 +87,7 @@ class PolarisAgentRegistryTest {
     }
 
     @Test
-    void register_mapsLocatorMetadataAndServiceToken() throws PolarisException {
+    void register_putsFullAgentCardJsonAndServiceTokenInMetadata() throws PolarisException {
         when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
                 .thenReturn(new InstanceRegisterResponse("inst-1", false));
 
@@ -112,10 +112,9 @@ class PolarisAgentRegistryTest {
         assertTrue(first.isAutoHeartbeat());
         assertEquals(5, first.getTtl());
         assertEquals("svc-token", first.getToken());
-        assertNull(first.getMetadata().get("a2a.agent.card"));
-        assertEquals(
-                "http://10.0.0.1:8080/.well-known/agent-card.json",
-                first.getMetadata().get("a2a.agent.card.url"));
+        assertNotNull(first.getMetadata().get("a2a.agent.card"));
+        assertTrue(first.getMetadata().get("a2a.agent.card").contains("\"name\":\"weather-agent\"")
+                || first.getMetadata().get("a2a.agent.card").contains("weather-agent"));
         assertEquals("JSONRPC", first.getMetadata().get("a2a.transport"));
         assertEquals("/", first.getMetadata().get("a2a.path"));
         assertEquals("weather-agent", first.getMetadata().get("ai-agent-name"));
@@ -123,37 +122,32 @@ class PolarisAgentRegistryTest {
         InstanceRegisterRequest second = requests.get(1);
         assertEquals(8443, second.getPort());
         assertEquals("https", second.getProtocol());
-        assertEquals(
-                "https://10.0.0.1:8443/.well-known/agent-card.json",
-                second.getMetadata().get("a2a.agent.card.url"));
         assertEquals("HTTP+JSON", second.getMetadata().get("a2a.transport"));
+        assertNotNull(second.getMetadata().get("a2a.agent.card"));
 
         assertEquals(2, registry.getRegistered().size());
         assertEquals("inst-1", registry.getRegistered().get(0).instanceId());
     }
 
     @Test
-    void register_usesAbsoluteCardUrlWhenAlreadyAgentCardDocument() throws PolarisException {
-        when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
-                .thenReturn(new InstanceRegisterResponse("inst-1", false));
-        AgentCard card = new AgentCard.Builder()
-                .name("weather-agent")
-                .description("weather-agent")
+    void register_oversizedAgentCardMetadata_throwsAndDoesNotRegister() throws PolarisException {
+        AgentCard huge = new AgentCard.Builder()
+                .name("huge-agent")
+                .description("x".repeat(70_000))
                 .version("1.0.0")
-                .url("https://cdn.example.com/cards/weather-agent-card.json")
+                .url("http://localhost:8080")
                 .capabilities(new AgentCapabilities(false, false, false, List.of()))
                 .defaultInputModes(List.of("text"))
                 .defaultOutputModes(List.of("text"))
                 .skills(List.of())
                 .build();
+        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5);
 
-        new PolarisAgentRegistry(providerAPI, NAMESPACE, 5)
-                .register(card, List.of(buildTransport("JSONRPC", "10.0.0.1", 8080, false)));
-
-        verify(providerAPI).registerInstance(registerCaptor.capture());
-        assertEquals(
-                "https://cdn.example.com/cards/weather-agent-card.json",
-                registerCaptor.getValue().getMetadata().get("a2a.agent.card.url"));
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> registry.register(huge, List.of(buildTransport("JSONRPC", "h", 9000, false))));
+        assertTrue(ex.getMessage().contains("64") || ex.getMessage().contains("65535"));
+        verify(providerAPI, never()).registerInstance(any());
+        assertTrue(registry.getRegistered().isEmpty());
     }
 
     @Test

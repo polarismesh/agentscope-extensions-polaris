@@ -19,9 +19,9 @@ package com.tencent.ai.polaris.a2a.constant;
 /**
  * Metadata keys and defaults used to carry A2A information on Polaris instances.
  *
- * <p>Polaris instance metadata is small (~1–2KB), so only locator fields are stored —
- * never the full AgentCard JSON. Discovery HTTP-fetches the card from
- * {@link #META_AGENT_CARD_URL}.
+ * <p>The serialized {@link io.a2a.spec.AgentCard} is stored under {@link #META_AGENT_CARD}.
+ * A single Polaris metadata value may be at most {@link #MAX_METADATA_VALUE_CHARS} characters
+ * (64KiB − 1).
  */
 public final class PolarisA2aConstants {
 
@@ -30,11 +30,8 @@ public final class PolarisA2aConstants {
 
     public static final String META_AGENT_NAME = "ai-agent-name";
 
-    /**
-     * Absolute HTTP(S) URL of the AgentCard document (typically
-     * {@code /.well-known/agent-card.json}).
-     */
-    public static final String META_AGENT_CARD_URL = "a2a.agent.card.url";
+    /** Holds the full serialized {@link io.a2a.spec.AgentCard} JSON. */
+    public static final String META_AGENT_CARD = "a2a.agent.card";
 
     /** Transport type of this instance endpoint (e.g. JSONRPC, HTTP+JSON). */
     public static final String META_TRANSPORT = "a2a.transport";
@@ -56,6 +53,9 @@ public final class PolarisA2aConstants {
      */
     public static final long DEFAULT_REFRESH_INTERVAL_MS = 30_000L;
 
-    /** Well-known AgentCard path appended when building a card URL from host/port. */
-    public static final String WELL_KNOWN_AGENT_CARD_PATH = "/.well-known/agent-card.json";
+    /**
+     * Maximum length of a single Polaris instance metadata value (characters).
+     * Equal to 64KiB − 1.
+     */
+    public static final int MAX_METADATA_VALUE_CHARS = 65_535;
 }

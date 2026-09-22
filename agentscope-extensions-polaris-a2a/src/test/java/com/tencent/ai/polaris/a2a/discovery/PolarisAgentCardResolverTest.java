@@ -31,10 +31,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -51,7 +49,6 @@ import static org.mockito.Mockito.when;
 class PolarisAgentCardResolverTest {
 
     private static final String NAMESPACE = "default";
-    private static final String CARD_URL = "http://10.0.0.1:8080/.well-known/agent-card.json";
 
     @Mock
     private ConsumerAPI consumerAPI;
@@ -89,26 +86,18 @@ class PolarisAgentCardResolverTest {
         return resp;
     }
 
-    private AgentCardHttpClient stubHttp(String url, String body) {
-        return requested -> {
-            assertEquals(url, requested);
-            return body;
-        };
-    }
-
-    private PolarisAgentCardResolver resolver(long refreshIntervalMs, AgentCardHttpClient httpClient) {
+    private PolarisAgentCardResolver resolver(long refreshIntervalMs) {
         return new PolarisAgentCardResolver(
-                consumerAPI, NAMESPACE, refreshIntervalMs, System::currentTimeMillis, httpClient);
+                consumerAPI, NAMESPACE, refreshIntervalMs, System::currentTimeMillis);
     }
 
     @Test
-    void getAgentCard_fetchesCardJsonFromMetadataUrl() throws PolarisException {
+    void getAgentCard_resolvesFromHealthyInstanceMetadata() throws PolarisException {
         String cardJson = AgentCardCodec.toJson(buildCard("weather-agent"));
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", CARD_URL));
+        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", cardJson));
         doReturn(responseWith(healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        PolarisAgentCardResolver resolver = resolver(-1, stubHttp(CARD_URL, cardJson));
-        AgentCard resolved = resolver.getAgentCard("weather-agent");
+        AgentCard resolved = resolver(-1).getAgentCard("weather-agent");
 
         assertEquals("weather-agent", resolved.name());
         assertEquals("1.0.0", resolved.version());
@@ -117,33 +106,22 @@ class PolarisAgentCardResolverTest {
     @Test
     void getAgentCard_skipsUnhealthyAndIsolatedInstances() throws PolarisException {
         String cardJson = AgentCardCodec.toJson(buildCard("echo"));
-        String goodUrl = "http://10.0.0.1:8080/.well-known/agent-card.json";
-        Instance unhealthy = buildInstance("10.0.0.2", 8081, false, false,
-                Map.of("a2a.agent.card.url", "http://10.0.0.2:8081/.well-known/agent-card.json"));
-        Instance isolated = buildInstance("10.0.0.3", 8082, true, true,
-                Map.of("a2a.agent.card.url", "http://10.0.0.3:8082/.well-known/agent-card.json"));
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", goodUrl));
+        Instance unhealthy = buildInstance("10.0.0.2", 8081, false, false, Map.of("a2a.agent.card", cardJson));
+        Instance isolated = buildInstance("10.0.0.3", 8082, true, true, Map.of("a2a.agent.card", cardJson));
+        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", cardJson));
         doReturn(responseWith(unhealthy, isolated, healthy))
                 .when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        AtomicInteger fetches = new AtomicInteger();
-        AgentCardHttpClient http = url -> {
-            fetches.incrementAndGet();
-            assertEquals(goodUrl, url);
-            return cardJson;
-        };
-
-        assertEquals("echo", resolver(-1, http).getAgentCard("echo").name());
-        assertEquals(1, fetches.get());
+        assertEquals("echo", resolver(-1).getAgentCard("echo").name());
     }
 
     @Test
     void getAgentCard_negativeRefresh_cachesForever() throws PolarisException {
         String cardJson = AgentCardCodec.toJson(buildCard("cached"));
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", CARD_URL));
+        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", cardJson));
         doReturn(responseWith(healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        PolarisAgentCardResolver resolver = resolver(-1, stubHttp(CARD_URL, cardJson));
+        PolarisAgentCardResolver resolver = resolver(-1);
         resolver.getAgentCard("cached");
         resolver.getAgentCard("cached");
 
@@ -153,10 +131,10 @@ class PolarisAgentCardResolverTest {
     @Test
     void getAgentCard_zeroRefresh_fetchesEveryCall() throws PolarisException {
         String cardJson = AgentCardCodec.toJson(buildCard("nocache"));
-        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", CARD_URL));
+        Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", cardJson));
         doReturn(responseWith(healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        PolarisAgentCardResolver resolver = resolver(0, stubHttp(CARD_URL, cardJson));
+        PolarisAgentCardResolver resolver = resolver(0);
         resolver.getAgentCard("nocache");
         resolver.getAgentCard("nocache");
 
@@ -167,20 +145,15 @@ class PolarisAgentCardResolverTest {
     void getAgentCard_refetchesAfterRefreshInterval() throws PolarisException {
         String firstJson = AgentCardCodec.toJson(buildCard("refreshable", "1.0.0"));
         String secondJson = AgentCardCodec.toJson(buildCard("refreshable", "2.0.0"));
-        Instance first = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", CARD_URL));
-        Instance second = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", CARD_URL));
+        Instance first = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", firstJson));
+        Instance second = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", secondJson));
         InstancesResponse firstResponse = responseWith(first);
         InstancesResponse secondResponse = responseWith(second);
         when(consumerAPI.getAllInstances(any(GetAllInstancesRequest.class)))
                 .thenReturn(firstResponse, secondResponse);
         AtomicLong now = new AtomicLong();
-        AtomicInteger fetches = new AtomicInteger();
-        AgentCardHttpClient http = url -> {
-            int n = fetches.getAndIncrement();
-            return n == 0 ? firstJson : secondJson;
-        };
         PolarisAgentCardResolver resolver =
-                new PolarisAgentCardResolver(consumerAPI, NAMESPACE, 100, now::get, http);
+                new PolarisAgentCardResolver(consumerAPI, NAMESPACE, 100, now::get);
 
         assertEquals("1.0.0", resolver.getAgentCard("refreshable").version());
         now.set(99);
@@ -194,14 +167,14 @@ class PolarisAgentCardResolverTest {
     @Test
     void getAgentCard_ttlRefreshFailure_keepsPreviousEntry() throws PolarisException {
         String firstJson = AgentCardCodec.toJson(buildCard("sticky", "1.0.0"));
-        Instance first = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", CARD_URL));
+        Instance first = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", firstJson));
         InstancesResponse firstResponse = responseWith(first);
         when(consumerAPI.getAllInstances(any(GetAllInstancesRequest.class)))
                 .thenReturn(firstResponse)
                 .thenThrow(new PolarisException(ErrorCode.API_TIMEOUT, "timeout"));
         AtomicLong now = new AtomicLong();
         PolarisAgentCardResolver resolver =
-                new PolarisAgentCardResolver(consumerAPI, NAMESPACE, 100, now::get, stubHttp(CARD_URL, firstJson));
+                new PolarisAgentCardResolver(consumerAPI, NAMESPACE, 100, now::get);
 
         assertEquals("1.0.0", resolver.getAgentCard("sticky").version());
         now.set(100);
@@ -209,32 +182,22 @@ class PolarisAgentCardResolverTest {
     }
 
     @Test
-    void getAgentCard_skipsBadUrlFetchAndDecodeAndUsesNext() throws Exception {
+    void getAgentCard_skipsMalformedCardAndUsesNext() throws PolarisException {
         String validJson = AgentCardCodec.toJson(buildCard("healthy"));
-        String badUrl = "http://10.0.0.1:8080/.well-known/agent-card.json";
-        String goodUrl = "http://10.0.0.2:8080/.well-known/agent-card.json";
-        Instance bad = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", badUrl));
-        Instance good = buildInstance("10.0.0.2", 8080, true, false, Map.of("a2a.agent.card.url", goodUrl));
-        doReturn(responseWith(bad, good)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+        Instance malformed = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", "{not-json"));
+        Instance valid = buildInstance("10.0.0.2", 8080, true, false, Map.of("a2a.agent.card", validJson));
+        doReturn(responseWith(malformed, valid)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        AgentCardHttpClient http = url -> {
-            if (badUrl.equals(url)) {
-                throw new IOException("boom");
-            }
-            return validJson;
-        };
-
-        assertEquals("healthy", resolver(-1, http).getAgentCard("healthy").name());
+        assertEquals("healthy", resolver(-1).getAgentCard("healthy").name());
     }
 
     @Test
     void getAgentCard_skipsCardWithDifferentName() throws PolarisException {
         String wrongJson = AgentCardCodec.toJson(buildCard("other"));
-        Instance wrong = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card.url", CARD_URL));
+        Instance wrong = buildInstance("10.0.0.1", 8080, true, false, Map.of("a2a.agent.card", wrongJson));
         doReturn(responseWith(wrong)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        assertThrows(AgentCardNotFoundException.class,
-                () -> resolver(-1, stubHttp(CARD_URL, wrongJson)).getAgentCard("requested"));
+        assertThrows(AgentCardNotFoundException.class, () -> resolver(-1).getAgentCard("requested"));
     }
 
     @Test
@@ -242,18 +205,14 @@ class PolarisAgentCardResolverTest {
         Instance healthy = buildInstance("10.0.0.1", 8080, true, false, Map.of());
         doReturn(responseWith(healthy)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        assertThrows(AgentCardNotFoundException.class,
-                () -> resolver(-1, url -> { throw new AssertionError("should not fetch"); })
-                        .getAgentCard("missing"));
+        assertThrows(AgentCardNotFoundException.class, () -> resolver(-1).getAgentCard("missing"));
     }
 
     @Test
     void getAgentCard_emptyInstances_throwsNotFound() throws PolarisException {
         doReturn(responseWith()).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
 
-        assertThrows(AgentCardNotFoundException.class,
-                () -> resolver(-1, url -> { throw new AssertionError("should not fetch"); })
-                        .getAgentCard("missing"));
+        assertThrows(AgentCardNotFoundException.class, () -> resolver(-1).getAgentCard("missing"));
     }
 
     @Test
@@ -261,8 +220,6 @@ class PolarisAgentCardResolverTest {
         when(consumerAPI.getAllInstances(any(GetAllInstancesRequest.class)))
                 .thenThrow(new PolarisException(ErrorCode.API_INVALID_ARGUMENT, "server down"));
 
-        assertThrows(IllegalStateException.class,
-                () -> resolver(-1, url -> { throw new AssertionError("should not fetch"); })
-                        .getAgentCard("down"));
+        assertThrows(IllegalStateException.class, () -> resolver(-1).getAgentCard("down"));
     }
 }
