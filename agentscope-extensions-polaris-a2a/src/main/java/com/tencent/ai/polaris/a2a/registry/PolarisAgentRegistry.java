@@ -117,14 +117,13 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
             rollback(registeredThisCall);
             throw new IllegalStateException(
                     "Failed to register agent '" + service + "' to polaris: " + e.getMessage(), e);
-        } catch (IllegalArgumentException e) {
+        } catch (RuntimeException e) {
             rollback(registeredThisCall);
             throw e;
         }
     }
 
     private void rollback(List<RegisteredInstance> instances) {
-        registered.removeAll(instances);
         deregister(instances);
     }
 
@@ -148,7 +147,6 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
     @Override
     public void close() {
         List<RegisteredInstance> snapshot = new ArrayList<>(registered);
-        registered.clear();
         deregister(snapshot);
     }
 
@@ -164,6 +162,7 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
             }
             try {
                 providerAPI.deRegister(req);
+                registered.remove(ri);
                 log.info("Deregistered agent '{}' instance {}:{} (instanceId={})",
                         ri.service(), ri.host(), ri.port(), ri.instanceId());
             } catch (Exception e) {

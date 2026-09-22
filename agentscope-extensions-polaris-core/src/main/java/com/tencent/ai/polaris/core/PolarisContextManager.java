@@ -64,9 +64,20 @@ public class PolarisContextManager implements AutoCloseable {
         this.properties = Objects.requireNonNull(properties, "properties");
         ConfigurationImpl config = buildConfiguration(properties);
 
-        this.sdkContext = initContext(config);
-        this.providerAPI = createProviderAPI(this.sdkContext);
-        this.consumerAPI = createConsumerAPI(this.sdkContext);
+        SDKContext initializedContext = null;
+        ProviderAPI initializedProviderAPI = null;
+        ConsumerAPI initializedConsumerAPI = null;
+        try {
+            initializedContext = initContext(config);
+            initializedProviderAPI = createProviderAPI(initializedContext);
+            initializedConsumerAPI = createConsumerAPI(initializedContext);
+        } catch (RuntimeException e) {
+            throw closeResourcesAndCollect(
+                    initializedProviderAPI, initializedConsumerAPI, initializedContext, e);
+        }
+        this.sdkContext = initializedContext;
+        this.providerAPI = initializedProviderAPI;
+        this.consumerAPI = initializedConsumerAPI;
     }
 
     static ConfigurationImpl buildConfiguration(PolarisServerProperties properties) {
@@ -133,14 +144,52 @@ public class PolarisContextManager implements AutoCloseable {
 
     @Override
     public void close() {
+        closeResources(providerAPI, consumerAPI, sdkContext);
+    }
+
+    static void closeResources(ProviderAPI providerAPI, ConsumerAPI consumerAPI, SDKContext sdkContext) {
+        RuntimeException failure = closeResourcesAndCollect(providerAPI, consumerAPI, sdkContext, null);
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private static RuntimeException closeResourcesAndCollect(
+            ProviderAPI providerAPI,
+            ConsumerAPI consumerAPI,
+            SDKContext sdkContext,
+            RuntimeException failure) {
         if (providerAPI != null) {
-            providerAPI.close();
+            try {
+                providerAPI.close();
+            } catch (RuntimeException e) {
+                failure = addFailure(failure, e);
+            }
         }
         if (consumerAPI != null) {
-            consumerAPI.close();
+            try {
+                consumerAPI.close();
+            } catch (RuntimeException e) {
+                failure = addFailure(failure, e);
+            }
         }
         if (sdkContext != null) {
-            sdkContext.close();
+            try {
+                sdkContext.close();
+            } catch (RuntimeException e) {
+                failure = addFailure(failure, e);
+            }
         }
+        return failure;
+    }
+
+    private static RuntimeException addFailure(RuntimeException failure, RuntimeException next) {
+        if (failure == null) {
+            return next;
+        }
+        if (failure != next) {
+            failure.addSuppressed(next);
+        }
+        return failure;
     }
 }

@@ -148,6 +148,51 @@ class PolarisAgentRegistryTest {
         verify(providerAPI).deRegister(deregisterCaptor.capture());
         assertEquals("inst-first", deregisterCaptor.getValue().getInstanceID());
         assertTrue(registry.getRegistered().isEmpty());
+        registry.close();
+    }
+
+    @Test
+    void register_runtimeFailure_rollsBackFirstTransport() throws PolarisException {
+        when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
+                .thenReturn(new InstanceRegisterResponse("inst-first", false))
+                .thenThrow(new RuntimeException("second failed"));
+        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5);
+
+        assertThrows(RuntimeException.class, () -> registry.register(
+                buildCard("echo", "2.0"),
+                List.of(
+                        buildTransport("JSONRPC", "h", 9000, false),
+                        buildTransport("HTTP+JSON", "h", 9001, false))));
+
+        verify(providerAPI).deRegister(deregisterCaptor.capture());
+        assertEquals("inst-first", deregisterCaptor.getValue().getInstanceID());
+        assertTrue(registry.getRegistered().isEmpty());
+        registry.close();
+    }
+
+    @Test
+    void register_failedRollback_remainsTrackedForCloseRetry() throws PolarisException {
+        when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
+                .thenReturn(new InstanceRegisterResponse("inst-first", false))
+                .thenThrow(new RuntimeException("second failed"));
+        org.mockito.Mockito.doThrow(new RuntimeException("rollback failed"))
+                .doNothing()
+                .when(providerAPI).deRegister(any(InstanceDeregisterRequest.class));
+        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5);
+
+        assertThrows(RuntimeException.class, () -> registry.register(
+                buildCard("echo", "2.0"),
+                List.of(
+                        buildTransport("JSONRPC", "h", 9000, false),
+                        buildTransport("HTTP+JSON", "h", 9001, false))));
+
+        assertEquals(1, registry.getRegistered().size());
+        assertEquals("inst-first", registry.getRegistered().get(0).instanceId());
+
+        registry.close();
+
+        verify(providerAPI, times(2)).deRegister(any(InstanceDeregisterRequest.class));
+        assertTrue(registry.getRegistered().isEmpty());
     }
 
     @Test
@@ -183,5 +228,6 @@ class PolarisAgentRegistryTest {
 
         registry.close();
         verify(providerAPI, times(1)).deRegister(any(InstanceDeregisterRequest.class));
+        assertEquals(1, registry.getRegistered().size());
     }
 }

@@ -167,6 +167,32 @@ class PolarisAgentCardResolverTest {
     }
 
     @Test
+    void getAgentCard_skipsNullCardAndUsesNextValidInstance() throws PolarisException {
+        String validJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("healthy"));
+        Instance nullCard = buildInstance("10.0.0.1", 8080, true,
+                Map.of("a2a.agent.card", "null"));
+        Instance valid = buildInstance("10.0.0.2", 8080, true,
+                Map.of("a2a.agent.card", validJson));
+        doReturn(responseWith(nullCard, valid))
+                .when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+
+        try (PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE)) {
+            assertEquals("healthy", resolver.getAgentCard("healthy").name());
+        }
+    }
+
+    @Test
+    void getAgentCard_onlyNullMetadata_throwsNotFound() throws PolarisException {
+        Instance nullCard = buildInstance("10.0.0.1", 8080, true,
+                Map.of("a2a.agent.card", "null"));
+        doReturn(responseWith(nullCard)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+
+        try (PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE)) {
+            assertThrows(AgentCardNotFoundException.class, () -> resolver.getAgentCard("missing"));
+        }
+    }
+
+    @Test
     void getAgentCard_skipsCardWithDifferentName() throws PolarisException {
         String wrongJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("other"));
         Instance wrong = buildInstance("10.0.0.1", 8080, true, Map.of("a2a.agent.card", wrongJson));
