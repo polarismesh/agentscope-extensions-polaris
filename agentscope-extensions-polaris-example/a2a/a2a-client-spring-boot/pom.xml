@@ -47,6 +47,18 @@
     </dependencyManagement>
 
     <dependencies>
+        <dependency>
+            <groupId>com.tencent.ai.polaris</groupId>
+            <artifactId>agentscope-extensions-polaris-example-a2a-client</artifactId>
+            <version>${revision}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>ch.qos.logback</groupId>
+                    <artifactId>logback-classic</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <!-- Polaris Spring Boot starter: provides PolarisAgentCardResolver bean + PolarisContextManager -->
         <dependency>
             <groupId>com.tencent.ai.polaris</groupId>

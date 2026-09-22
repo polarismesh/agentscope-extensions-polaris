@@ -25,8 +25,8 @@ public class PolarisA2aDiscoveryProperties {
     private boolean enabled = true;
 
     /**
-     * Cache refresh interval in milliseconds. {@code 0} (default) = no proactive refresh, the card is fetched once
-     * and cached. {@code >0} = a scheduled pull refreshes the cache.
+     * Cache refresh interval in milliseconds. {@code 0} (default) = the card is fetched once and cached.
+     * {@code >0} = a stale entry is refreshed from Polaris on the next lookup.
      */
     private long refreshIntervalMs = 0;
 

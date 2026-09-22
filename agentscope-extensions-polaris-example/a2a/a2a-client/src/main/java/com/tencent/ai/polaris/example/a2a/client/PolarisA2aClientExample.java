@@ -43,7 +43,7 @@ public class PolarisA2aClientExample {
     private static final Logger log = LoggerFactory.getLogger(PolarisA2aClientExample.class);
 
     public static void main(String[] args) {
-        String polarisAddress = env("POLARIS_ADDRESS", "114.132.133.191:8091");
+        String polarisAddress = env("POLARIS_ADDRESS", "127.0.0.1:8091");
         String agentName = env("A2A_AGENT_NAME", "polaris-a2a-example-agent");
 
         PolarisContextManager context = PolarisContextManager.fromAddress(polarisAddress);

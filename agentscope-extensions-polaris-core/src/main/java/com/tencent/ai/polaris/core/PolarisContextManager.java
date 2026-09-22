@@ -26,6 +26,7 @@ import com.tencent.polaris.factory.api.DiscoveryAPIFactory;
 
 import com.tencent.polaris.factory.config.ConfigurationImpl;
 import com.tencent.polaris.factory.config.global.GlobalConfigImpl;
+import com.tencent.polaris.factory.config.global.ServerConnectorConfigImpl;
 import com.tencent.polaris.factory.config.provider.LosslessConfigImpl;
 import java.util.List;
 import java.util.Objects;
@@ -61,19 +62,29 @@ public class PolarisContextManager implements AutoCloseable {
 
     public PolarisContextManager(PolarisServerProperties properties) {
         this.properties = Objects.requireNonNull(properties, "properties");
+        ConfigurationImpl config = buildConfiguration(properties);
+
+        this.sdkContext = initContext(config);
+        this.providerAPI = createProviderAPI(this.sdkContext);
+        this.consumerAPI = createConsumerAPI(this.sdkContext);
+    }
+
+    static ConfigurationImpl buildConfiguration(PolarisServerProperties properties) {
+        Objects.requireNonNull(properties, "properties");
         List<String> addresses = properties.serverAddressList();
         if (addresses == null || addresses.isEmpty()) {
             throw new IllegalArgumentException("polaris server address must be configured");
         }
         ConfigurationImpl config = (ConfigurationImpl) ConfigAPIFactory.createConfigurationByAddress(addresses);
         GlobalConfigImpl globalConfig = (GlobalConfigImpl) config.getGlobal();
+        String token = properties.getToken();
+        if (token != null && !token.isBlank()) {
+            ((ServerConnectorConfigImpl) globalConfig.getServerConnector()).setToken(token);
+        }
         globalConfig.getStatReporter().setEnable(false);
         LosslessConfigImpl losslessConfig = (LosslessConfigImpl) config.getProvider().getLossless();
         losslessConfig.setEnable(false);
-
-        this.sdkContext = initContext(config);
-        this.providerAPI = createProviderAPI(this.sdkContext);
-        this.consumerAPI = createConsumerAPI(this.sdkContext);
+        return config;
     }
 
     private static SDKContext initContext(Configuration config) {

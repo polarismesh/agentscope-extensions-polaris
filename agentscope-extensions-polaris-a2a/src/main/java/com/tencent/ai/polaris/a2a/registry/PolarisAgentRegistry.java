@@ -84,35 +84,48 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
         }
         String service = agentCard.name();
         String cardJson = AgentCardCodec.toJson(agentCard);
+        List<RegisteredInstance> registeredThisCall = new ArrayList<>();
 
-        for (TransportProperties tp : transports) {
-            InstanceRegisterRequest req = new InstanceRegisterRequest();
-            req.setNamespace(namespace);
-            req.setService(service);
-            req.setHost(tp.host());
-            Integer port = tp.port();
-            if (port == null) {
-                throw new IllegalArgumentException("transport port must not be null for agent: " + service);
-            }
-            req.setPort(port);
-            req.setVersion(agentCard.version());
-            req.setProtocol(resolveProtocol(tp));
-            req.setTtl(ttl);
-            req.setAutoHeartbeat(true);
-            Map<String, String> meta = buildMetadata(cardJson, tp);
-            meta.put(PolarisA2aConstants.META_AGENT_NAME, agentCard.name());
-            req.setMetadata(meta);
+        try {
+            for (TransportProperties tp : transports) {
+                InstanceRegisterRequest req = new InstanceRegisterRequest();
+                req.setNamespace(namespace);
+                req.setService(service);
+                req.setHost(tp.host());
+                Integer port = tp.port();
+                if (port == null) {
+                    throw new IllegalArgumentException("transport port must not be null for agent: " + service);
+                }
+                req.setPort(port);
+                req.setVersion(agentCard.version());
+                req.setProtocol(resolveProtocol(tp));
+                req.setTtl(ttl);
+                req.setAutoHeartbeat(true);
+                Map<String, String> meta = buildMetadata(cardJson, tp);
+                meta.put(PolarisA2aConstants.META_AGENT_NAME, agentCard.name());
+                req.setMetadata(meta);
 
-            try {
                 InstanceRegisterResponse resp = providerAPI.registerInstance(req);
-                registered.add(new RegisteredInstance(service, tp.host(), port, resp.getInstanceId()));
+                RegisteredInstance instance =
+                        new RegisteredInstance(service, tp.host(), port, resp.getInstanceId());
+                registered.add(instance);
+                registeredThisCall.add(instance);
                 log.info("Registered agent '{}' transport '{}' instance at {}:{} (instanceId={})",
                         service, tp.transportType(), tp.host(), port, resp.getInstanceId());
-            } catch (PolarisException e) {
-                throw new IllegalStateException("Failed to register agent '" + service
-                        + "' transport '" + tp.transportType() + "' to polaris: " + e.getMessage(), e);
             }
+        } catch (PolarisException e) {
+            rollback(registeredThisCall);
+            throw new IllegalStateException(
+                    "Failed to register agent '" + service + "' to polaris: " + e.getMessage(), e);
+        } catch (IllegalArgumentException e) {
+            rollback(registeredThisCall);
+            throw e;
         }
+    }
+
+    private void rollback(List<RegisteredInstance> instances) {
+        registered.removeAll(instances);
+        deregister(instances);
     }
 
     private static Map<String, String> buildMetadata(String cardJson, TransportProperties tp) {
@@ -136,7 +149,11 @@ public class PolarisAgentRegistry implements AgentRegistry, AutoCloseable {
     public void close() {
         List<RegisteredInstance> snapshot = new ArrayList<>(registered);
         registered.clear();
-        for (RegisteredInstance ri : snapshot) {
+        deregister(snapshot);
+    }
+
+    private void deregister(List<RegisteredInstance> instances) {
+        for (RegisteredInstance ri : instances) {
             InstanceDeregisterRequest req = new InstanceDeregisterRequest();
             req.setNamespace(namespace);
             req.setService(ri.service());

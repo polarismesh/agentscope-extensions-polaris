@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 
 /**
  * AgentScope A2A card resolver backed by polaris-java.
@@ -50,21 +51,44 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
 
     private final ConsumerAPI consumerAPI;
     private final String namespace;
-    private final ConcurrentHashMap<String, AgentCard> cache = new ConcurrentHashMap<>();
+    private final long refreshIntervalMs;
+    private final LongSupplier currentTimeMillis;
+    private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public PolarisAgentCardResolver(PolarisContextManager context) {
-        this(context.consumerAPI(), context.getNamespace());
+        this(context.consumerAPI(), context.getNamespace(), 0, System::currentTimeMillis);
     }
 
     PolarisAgentCardResolver(ConsumerAPI consumerAPI, String namespace) {
+        this(consumerAPI, namespace, 0, System::currentTimeMillis);
+    }
+
+    PolarisAgentCardResolver(
+            ConsumerAPI consumerAPI, String namespace, long refreshIntervalMs, LongSupplier currentTimeMillis) {
         this.consumerAPI = Objects.requireNonNull(consumerAPI, "consumerAPI");
         this.namespace = Objects.requireNonNull(namespace, "namespace");
+        this.refreshIntervalMs = refreshIntervalMs;
+        this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
     }
 
     @Override
     public AgentCard getAgentCard(String agentName) {
         Objects.requireNonNull(agentName, "agentName");
-        return cache.computeIfAbsent(agentName, this::fetchFromPolaris);
+        if (refreshIntervalMs <= 0) {
+            return cache.computeIfAbsent(agentName, this::fetchEntry).card();
+        }
+        long now = currentTimeMillis.getAsLong();
+        return cache.compute(agentName, (name, current) -> {
+            if (current == null || now - current.fetchedAtMs() >= refreshIntervalMs) {
+                AgentCard card = fetchFromPolaris(name);
+                return new CacheEntry(card, currentTimeMillis.getAsLong());
+            }
+            return current;
+        }).card();
+    }
+
+    private CacheEntry fetchEntry(String agentName) {
+        return new CacheEntry(fetchFromPolaris(agentName), currentTimeMillis.getAsLong());
     }
 
     private AgentCard fetchFromPolaris(String agentName) {
@@ -92,7 +116,19 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
             }
             String json = metadata.get(PolarisA2aConstants.META_AGENT_CARD);
             if (json != null) {
-                AgentCard card = AgentCardCodec.fromJson(json);
+                AgentCard card;
+                try {
+                    card = AgentCardCodec.fromJson(json);
+                } catch (IllegalArgumentException e) {
+                    log.warn("Skipping malformed agent card for '{}' from instance {}:{}",
+                            agentName, inst.getHost(), inst.getPort(), e);
+                    continue;
+                }
+                if (card.name() != null && !agentName.equals(card.name())) {
+                    log.warn("Skipping agent card named '{}' while resolving '{}' from instance {}:{}",
+                            card.name(), agentName, inst.getHost(), inst.getPort());
+                    continue;
+                }
                 log.debug("Resolved agent '{}' card from instance {}:{}",
                         agentName, inst.getHost(), inst.getPort());
                 return card;
@@ -123,13 +159,23 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
     public static final class Builder {
 
         private final PolarisContextManager context;
+        private long refreshIntervalMs;
 
         private Builder(PolarisContextManager context) {
             this.context = Objects.requireNonNull(context, "context");
         }
 
-        public PolarisAgentCardResolver build() {
-            return new PolarisAgentCardResolver(context.consumerAPI(), context.getNamespace());
+        public Builder refreshIntervalMs(long refreshIntervalMs) {
+            this.refreshIntervalMs = refreshIntervalMs;
+            return this;
         }
+
+        public PolarisAgentCardResolver build() {
+            return new PolarisAgentCardResolver(
+                    context.consumerAPI(), context.getNamespace(), refreshIntervalMs, System::currentTimeMillis);
+        }
+    }
+
+    private record CacheEntry(AgentCard card, long fetchedAtMs) {
     }
 }

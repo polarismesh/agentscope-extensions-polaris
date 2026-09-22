@@ -27,6 +27,7 @@ import io.agentscope.core.a2a.server.registry.AgentRegistry;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -56,6 +57,7 @@ public class AgentscopeA2aPolarisAutoConfiguration {
      * @return the Polaris-backed {@link AgentRegistry}
      */
     @Bean
+    @ConditionalOnMissingBean(AgentRegistry.class)
     @ConditionalOnProperty(
             name = "agentscope.polaris.a2a.registry.enabled",
             havingValue = "true",
@@ -71,15 +73,20 @@ public class AgentscopeA2aPolarisAutoConfiguration {
      * Resolves A2A agent cards from Polaris.
      *
      * @param context shared Polaris SDK context
+     * @param a2aProperties A2A registry/discovery settings
      * @return the Polaris-backed {@link AgentCardResolver}
      */
     @Bean
+    @ConditionalOnMissingBean(AgentCardResolver.class)
     @ConditionalOnProperty(
             prefix = PolarisConstants.A2A_POLARIS_DISCOVERY_PREFIX,
             name = "enabled",
             havingValue = "true",
             matchIfMissing = true)
-    public AgentCardResolver polarisAgentCardResolver(PolarisContextManager context) {
-        return PolarisAgentCardResolver.builder(context).build();
+    public AgentCardResolver polarisAgentCardResolver(
+            PolarisContextManager context, AgentScopeA2aPolarisProperties a2aProperties) {
+        return PolarisAgentCardResolver.builder(context)
+                .refreshIntervalMs(a2aProperties.getDiscovery().getRefreshIntervalMs())
+                .build();
     }
 }

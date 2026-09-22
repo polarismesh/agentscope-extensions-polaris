@@ -105,6 +105,32 @@ class AgentscopePolarisAutoConfigurationTest {
                 });
     }
 
+    @Test
+    void shouldKeepUserSuppliedAgentRegistry() {
+        AgentRegistry customRegistry = mock(AgentRegistry.class);
+
+        runner.withPropertyValues("agentscope.polaris.a2a.enabled=true")
+                .withBean(PolarisContextManager.class, AgentscopePolarisAutoConfigurationTest::stubContextManager)
+                .withBean(AgentRegistry.class, () -> customRegistry)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(AgentRegistry.class);
+                    assertThat(context.getBean(AgentRegistry.class)).isSameAs(customRegistry);
+                });
+    }
+
+    @Test
+    void shouldKeepUserSuppliedAgentCardResolver() {
+        AgentCardResolver customResolver = mock(AgentCardResolver.class);
+
+        runner.withPropertyValues("agentscope.polaris.a2a.enabled=true")
+                .withBean(PolarisContextManager.class, AgentscopePolarisAutoConfigurationTest::stubContextManager)
+                .withBean(AgentCardResolver.class, () -> customResolver)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(AgentCardResolver.class);
+                    assertThat(context.getBean(AgentCardResolver.class)).isSameAs(customResolver);
+                });
+    }
+
     /**
      * Regression: A2A beans must appear when {@link PolarisContextManager} is created by this
      * starter's own auto-configuration, not only when a user bean is registered first.

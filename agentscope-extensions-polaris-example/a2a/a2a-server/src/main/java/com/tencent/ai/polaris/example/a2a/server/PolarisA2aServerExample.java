@@ -79,7 +79,7 @@ public class PolarisA2aServerExample {
     private static final Logger log = LoggerFactory.getLogger(PolarisA2aServerExample.class);
 
     public static void main(String[] args) throws Exception {
-        String polarisAddress = env("POLARIS_ADDRESS", "114.132.133.191:8091");
+        String polarisAddress = env("POLARIS_ADDRESS", "127.0.0.1:8091");
         String agentName = env("A2A_AGENT_NAME", "polaris-a2a-example-agent");
         String host = env("A2A_SERVER_HOST", "localhost");
         int port = Integer.parseInt(env("A2A_SERVER_PORT", "8888"));

@@ -16,24 +16,14 @@
 
 package com.tencent.ai.polaris.example.a2a.client.springboot;
 
+import com.tencent.ai.polaris.example.a2a.client.A2aAgentExampleRunner;
 import io.agentscope.core.a2a.agent.A2aAgent;
 import io.agentscope.core.a2a.agent.card.AgentCardResolver;
-import io.agentscope.core.agent.StreamOptions;
-import io.agentscope.core.message.Msg;
-import io.agentscope.core.message.MsgRole;
-import io.agentscope.core.message.TextBlock;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.util.List;
 
 /**
  * Spring Boot A2A client example backed by Polaris.
@@ -47,11 +37,22 @@ import java.util.List;
 @SpringBootApplication
 public class PolarisA2aClientSpringBootExample {
 
-    private static final Logger log = LoggerFactory.getLogger(PolarisA2aClientSpringBootExample.class);
-
-
     public static void main(String[] args) {
         SpringApplication.run(PolarisA2aClientSpringBootExample.class, args);
     }
 
+    @Bean
+    A2aAgent a2aAgent(
+            AgentCardResolver agentCardResolver,
+            @Value("${agentscope.a2a.agent-name}") String agentName) {
+        return A2aAgent.builder()
+                .name(agentName)
+                .agentCardResolver(agentCardResolver)
+                .build();
+    }
+
+    @Bean
+    CommandLineRunner a2aClientRunner(A2aAgent agent) {
+        return args -> new A2aAgentExampleRunner(agent).startExample();
+    }
 }

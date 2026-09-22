@@ -49,7 +49,7 @@ agentscope:
             description: Get the current date and time.
             tags: [time]
   polaris:
-    address: ${POLARIS_ADDRESS:114.132.133.191:8091}
+    address: ${POLARIS_ADDRESS:127.0.0.1:8091}
     namespace: ${POLARIS_NAMESPACE:default}
     token: ${POLARIS_TOKEN:}
     enabled: true

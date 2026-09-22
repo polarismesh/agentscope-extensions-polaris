@@ -19,6 +19,7 @@ package com.tencent.ai.polaris.a2a.registry;
 import io.a2a.spec.AgentCapabilities;
 import io.a2a.spec.AgentCard;
 import io.agentscope.core.a2a.server.transport.TransportProperties;
+import com.tencent.polaris.api.exception.ErrorCode;
 import com.tencent.polaris.api.core.ProviderAPI;
 import com.tencent.polaris.api.exception.PolarisException;
 import com.tencent.polaris.api.rpc.InstanceDeregisterRequest;
@@ -129,6 +130,24 @@ class PolarisAgentRegistryTest {
         assertThrows(IllegalArgumentException.class,
                 () -> registry.register(buildCard("a", "1"), List.of()));
         verify(providerAPI, never()).registerInstance(any());
+    }
+
+    @Test
+    void register_secondTransportFailure_rollsBackFirstTransport() throws PolarisException {
+        when(providerAPI.registerInstance(any(InstanceRegisterRequest.class)))
+                .thenReturn(new InstanceRegisterResponse("inst-first", false))
+                .thenThrow(new PolarisException(ErrorCode.API_INVALID_ARGUMENT, "second failed"));
+        PolarisAgentRegistry registry = new PolarisAgentRegistry(providerAPI, NAMESPACE, 5);
+
+        assertThrows(IllegalStateException.class, () -> registry.register(
+                buildCard("echo", "2.0"),
+                List.of(
+                        buildTransport("JSONRPC", "h", 9000, false),
+                        buildTransport("HTTP+JSON", "h", 9001, false))));
+
+        verify(providerAPI).deRegister(deregisterCaptor.capture());
+        assertEquals("inst-first", deregisterCaptor.getValue().getInstanceID());
+        assertTrue(registry.getRegistered().isEmpty());
     }
 
     @Test

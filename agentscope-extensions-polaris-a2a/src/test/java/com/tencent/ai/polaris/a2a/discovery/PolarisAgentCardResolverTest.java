@@ -31,6 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -115,6 +116,76 @@ class PolarisAgentCardResolverTest {
         resolver.getAgentCard("cached");
 
         verify(consumerAPI, times(1)).getAllInstances(any(GetAllInstancesRequest.class));
+    }
+
+    @Test
+    void getAgentCard_refetchesAfterRefreshInterval() throws PolarisException {
+        String firstJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("refreshable"));
+        String secondJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(
+                new AgentCard.Builder()
+                        .name("refreshable")
+                        .description("updated")
+                        .version("2.0.0")
+                        .url("http://localhost:8080")
+                        .capabilities(new AgentCapabilities(false, false, false, List.of()))
+                        .defaultInputModes(List.of("text"))
+                        .defaultOutputModes(List.of("text"))
+                        .skills(List.of())
+                        .build());
+        Instance first = buildInstance("10.0.0.1", 8080, true, Map.of("a2a.agent.card", firstJson));
+        Instance second = buildInstance("10.0.0.1", 8080, true, Map.of("a2a.agent.card", secondJson));
+        InstancesResponse firstResponse = responseWith(first);
+        InstancesResponse secondResponse = responseWith(second);
+        when(consumerAPI.getAllInstances(any(GetAllInstancesRequest.class)))
+                .thenReturn(firstResponse, secondResponse);
+        AtomicLong now = new AtomicLong();
+        PolarisAgentCardResolver resolver =
+                new PolarisAgentCardResolver(consumerAPI, NAMESPACE, 100, now::get);
+
+        assertEquals("1.0.0", resolver.getAgentCard("refreshable").version());
+        now.set(99);
+        assertEquals("1.0.0", resolver.getAgentCard("refreshable").version());
+        now.set(100);
+        assertEquals("2.0.0", resolver.getAgentCard("refreshable").version());
+
+        verify(consumerAPI, times(2)).getAllInstances(any(GetAllInstancesRequest.class));
+    }
+
+    @Test
+    void getAgentCard_skipsMalformedCardAndUsesNextValidInstance() throws PolarisException {
+        String validJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("healthy"));
+        Instance malformed = buildInstance("10.0.0.1", 8080, true,
+                Map.of("a2a.agent.card", "{not-json"));
+        Instance valid = buildInstance("10.0.0.2", 8080, true,
+                Map.of("a2a.agent.card", validJson));
+        doReturn(responseWith(malformed, valid))
+                .when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+
+        PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
+
+        assertEquals("healthy", resolver.getAgentCard("healthy").name());
+    }
+
+    @Test
+    void getAgentCard_skipsCardWithDifferentName() throws PolarisException {
+        String wrongJson = com.tencent.ai.polaris.a2a.util.AgentCardCodec.toJson(buildCard("other"));
+        Instance wrong = buildInstance("10.0.0.1", 8080, true, Map.of("a2a.agent.card", wrongJson));
+        doReturn(responseWith(wrong)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+
+        PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
+
+        assertThrows(AgentCardNotFoundException.class, () -> resolver.getAgentCard("requested"));
+    }
+
+    @Test
+    void getAgentCard_onlyMalformedMetadata_throwsNotFound() throws PolarisException {
+        Instance malformed = buildInstance("10.0.0.1", 8080, true,
+                Map.of("a2a.agent.card", "{not-json"));
+        doReturn(responseWith(malformed)).when(consumerAPI).getAllInstances(any(GetAllInstancesRequest.class));
+
+        PolarisAgentCardResolver resolver = new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
+
+        assertThrows(AgentCardNotFoundException.class, () -> resolver.getAgentCard("missing"));
     }
 
     @Test
