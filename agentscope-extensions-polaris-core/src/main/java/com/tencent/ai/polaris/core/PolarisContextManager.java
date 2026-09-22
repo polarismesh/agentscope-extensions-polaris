@@ -28,6 +28,9 @@ import com.tencent.polaris.factory.config.ConfigurationImpl;
 import com.tencent.polaris.factory.config.global.GlobalConfigImpl;
 import com.tencent.polaris.factory.config.global.ServerConnectorConfigImpl;
 import com.tencent.polaris.factory.config.provider.LosslessConfigImpl;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -42,6 +45,8 @@ import java.util.Objects;
  * starter it would be a {@code @Bean}.
  */
 public class PolarisContextManager implements AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(PolarisContextManager.class);
 
     private final PolarisServerProperties properties;
     private final SDKContext sdkContext;
@@ -62,22 +67,34 @@ public class PolarisContextManager implements AutoCloseable {
 
     public PolarisContextManager(PolarisServerProperties properties) {
         this.properties = Objects.requireNonNull(properties, "properties");
+        List<String> addresses = properties.serverAddressList();
+        log.info("Initializing Polaris SDK context: namespace={}, addresses={}",
+                properties.getNamespace(), addresses);
+        log.debug("Polaris server token configured: {}", hasToken(properties.getToken()));
+
         ConfigurationImpl config = buildConfiguration(properties);
 
         SDKContext initializedContext = null;
         ProviderAPI initializedProviderAPI = null;
         ConsumerAPI initializedConsumerAPI = null;
         try {
+            log.debug("Initializing Polaris SDKContext");
             initializedContext = initContext(config);
+            log.debug("Creating Polaris ProviderAPI");
             initializedProviderAPI = createProviderAPI(initializedContext);
+            log.debug("Creating Polaris ConsumerAPI");
             initializedConsumerAPI = createConsumerAPI(initializedContext);
         } catch (RuntimeException e) {
+            log.debug("Polaris SDK context initialization failed, closing partial resources: {}",
+                    e.getMessage());
             throw closeResourcesAndCollect(
                     initializedProviderAPI, initializedConsumerAPI, initializedContext, e);
         }
         this.sdkContext = initializedContext;
         this.providerAPI = initializedProviderAPI;
         this.consumerAPI = initializedConsumerAPI;
+        log.info("Polaris SDK context ready: namespace={}, addresses={}",
+                properties.getNamespace(), addresses);
     }
 
     static ConfigurationImpl buildConfiguration(PolarisServerProperties properties) {
@@ -91,11 +108,18 @@ public class PolarisContextManager implements AutoCloseable {
         String token = properties.getToken();
         if (token != null && !token.isBlank()) {
             ((ServerConnectorConfigImpl) globalConfig.getServerConnector()).setToken(token);
+            log.debug("Applied Polaris server connector token");
         }
         globalConfig.getStatReporter().setEnable(false);
         LosslessConfigImpl losslessConfig = (LosslessConfigImpl) config.getProvider().getLossless();
         losslessConfig.setEnable(false);
+        log.debug("Polaris SDK configuration built: addresses={}, tokenConfigured={}, statReporter=false, lossless=false",
+                addresses, hasToken(token));
         return config;
+    }
+
+    private static boolean hasToken(String token) {
+        return token != null && !token.isBlank();
     }
 
     private static SDKContext initContext(Configuration config) {
