@@ -25,7 +25,7 @@ import io.agentscope.core.a2a.agent.card.AgentCardResolver;
 import com.tencent.polaris.api.core.ConsumerAPI;
 import com.tencent.polaris.api.exception.PolarisException;
 import com.tencent.polaris.api.pojo.Instance;
-import com.tencent.polaris.api.rpc.GetAllInstancesRequest;
+import com.tencent.polaris.api.rpc.GetHealthyInstancesRequest;
 import com.tencent.polaris.api.rpc.InstancesResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,26 +40,26 @@ import java.util.function.LongSupplier;
  *
  * <p>Service mapping matches {@link com.tencent.ai.polaris.a2a.registry.PolarisAgentRegistry}:
  * the agent name is the Polaris service name. Discovery is pull-based —
- * {@link #getAgentCard(String)} calls {@code ConsumerAPI.getAllInstances} and rebuilds
+ * {@link #getAgentCard(String)} calls {@code ConsumerAPI.getHealthyInstances} and rebuilds
  * the card from instance metadata {@link PolarisA2aConstants#META_AGENT_CARD} (full
- * AgentCard JSON written at register time).
+ * AgentCard JSON written at register time). Unhealthy and isolated instances are
+ * already excluded by that API.
  *
- * <p>Candidate instances are skipped when they are unhealthy, isolated, missing
- * {@code a2a.agent.card}, fail JSON decode, or carry a card whose {@code name} does
- * not match the requested agent. The first remaining instance wins.
+ * <p>Instance stickiness: the first successful lookup picks one usable instance and
+ * keeps that {@link AgentCard} (and its {@code url}) for later calls. On each later
+ * lookup the healthy list is checked; if that instance is still present with a usable
+ * card, the cached card is returned unchanged. If it has left the healthy set (or its
+ * metadata is no longer usable), another instance is chosen, an info log is written,
+ * and the new card is cached. Polaris SDK errors after a successful pick keep the
+ * cached card (warn log).
  *
- * <p>Cache semantics for {@code refreshIntervalMs} (default
- * {@link PolarisA2aConstants#DEFAULT_REFRESH_INTERVAL_MS}):
- * <ul>
- *   <li>{@code >0} — TTL; refresh is done outside {@link ConcurrentHashMap} compute
- *       locks so a Polaris RPC does not pin a bucket</li>
- *   <li>{@code 0} — no cache; every call hits Polaris</li>
- *   <li>{@code <0} — cache forever until {@link #invalidate(String)} /
- *       {@link #invalidateAll()}</li>
- * </ul>
- * On TTL refresh failure the previous cache entry is kept (warn log). A true miss
- * throws {@link AgentCardNotFoundException}; Polaris SDK / network errors throw
- * {@link IllegalStateException} so callers can retry.
+ * <p>Candidates are skipped when they are missing {@code a2a.agent.card}, fail JSON
+ * decode, or carry a card whose {@code name} does not match the requested agent.
+ * When picking (first time or failover) the first remaining instance in the healthy
+ * list wins.
+ *
+ * <p>A true miss throws {@link AgentCardNotFoundException}; Polaris SDK errors on a
+ * cold miss throw {@link IllegalStateException} so callers can retry.
  */
 public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseable {
 
@@ -67,12 +67,10 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
 
     private final ConsumerAPI consumerAPI;
     private final String namespace;
-    private final long refreshIntervalMs;
-    private final LongSupplier currentTimeMillis;
     private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     /**
-     * Builds a resolver sharing the given Polaris context, with the default discovery TTL.
+     * Builds a resolver sharing the given Polaris context.
      *
      * @param context shared SDK context (namespace + {@link ConsumerAPI})
      */
@@ -86,10 +84,10 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
     }
 
     /**
-     * Package-visible constructor for tests that inject {@link ConsumerAPI} and a clock.
+     * Package-visible constructor for tests that inject {@link ConsumerAPI}.
      *
-     * @param refreshIntervalMs see class javadoc for {@code >0} / {@code 0} / {@code <0}
-     * @param currentTimeMillis injectable clock used for TTL decisions
+     * @param refreshIntervalMs unused; retained so existing builder / test call sites compile
+     * @param currentTimeMillis unused; retained so existing test call sites compile
      */
     PolarisAgentCardResolver(
             ConsumerAPI consumerAPI,
@@ -98,119 +96,108 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
             LongSupplier currentTimeMillis) {
         this.consumerAPI = Objects.requireNonNull(consumerAPI, "consumerAPI");
         this.namespace = Objects.requireNonNull(namespace, "namespace");
-        this.refreshIntervalMs = refreshIntervalMs;
-        this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
+        Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
     }
 
     /**
-     * Resolve the AgentCard for {@code agentName} according to the cache policy.
+     * Resolve the AgentCard for {@code agentName}, sticky to the previously chosen instance
+     * until that instance is no longer healthy / usable.
      *
      * @param agentName Polaris service name / {@link AgentCard#name()}
-     * @return the first usable card from healthy, non-isolated instances
+     * @return the sticky card, or a newly chosen card after failover
      * @throws AgentCardNotFoundException if no instance has a usable card
-     * @throws IllegalStateException if the Polaris lookup itself fails
+     * @throws IllegalStateException if the Polaris lookup itself fails and nothing is cached
      */
     @Override
     public AgentCard getAgentCard(String agentName) {
         Objects.requireNonNull(agentName, "agentName");
-        if (refreshIntervalMs == 0) {
-            return fetchFromPolaris(agentName);
-        }
-        if (refreshIntervalMs < 0) {
-            return getOrLoadForever(agentName);
-        }
-        return getOrRefreshTtl(agentName);
-    }
-
-    /** Cache forever: Polaris fetch only on miss; concurrent misses may both fetch. */
-    private AgentCard getOrLoadForever(String agentName) {
-        CacheEntry existing = cache.get(agentName);
-        if (existing != null) {
-            return existing.card();
-        }
-        AgentCard card = fetchFromPolaris(agentName);
-        CacheEntry created = new CacheEntry(card, currentTimeMillis.getAsLong());
-        CacheEntry raced = cache.putIfAbsent(agentName, created);
-        return raced != null ? raced.card() : card;
-    }
-
-    /**
-     * TTL cache: serve a fresh entry; on expiry fetch outside the map lock and keep
-     * the previous card if the refresh throws.
-     */
-    private AgentCard getOrRefreshTtl(String agentName) {
         CacheEntry current = cache.get(agentName);
-        long now = currentTimeMillis.getAsLong();
-        if (current != null && now - current.fetchedAtMs() < refreshIntervalMs) {
-            return current.card();
-        }
+        Instance[] instances;
         try {
-            AgentCard card = fetchFromPolaris(agentName);
-            cache.put(agentName, new CacheEntry(card, currentTimeMillis.getAsLong()));
-            return card;
-        } catch (RuntimeException e) {
+            instances = loadHealthyInstances(agentName);
+        } catch (PolarisException e) {
             if (current != null) {
-                log.warn("Failed to refresh AgentCard for '{}'; keeping cached entry: {}",
-                        agentName, e.getMessage());
+                log.warn("Failed to refresh instances for agent '{}'; keeping instance {}:{}: {}",
+                        agentName, current.host(), current.port(), e.getMessage());
                 return current.card();
             }
-            throw e;
-        }
-    }
-
-    /**
-     * Pull all instances of {@code agentName} and decode {@code a2a.agent.card}
-     * from the first healthy, non-isolated candidate.
-     */
-    private AgentCard fetchFromPolaris(String agentName) {
-        GetAllInstancesRequest req = GetAllInstancesRequest.builder()
-                .namespace(namespace)
-                .service(agentName)
-                .build();
-        InstancesResponse resp;
-        try {
-            resp = consumerAPI.getAllInstances(req);
-        } catch (PolarisException e) {
             throw new IllegalStateException(
                     "Failed to discover agent '" + agentName + "' from polaris: " + e.getMessage(), e);
         }
-        Instance[] instances = resp.getInstances();
-        if (instances == null) {
+        if (current != null && stickyStillUsable(current, instances, agentName)) {
+            return current.card();
+        }
+        DecodedInstance picked = pickFirstUsable(instances, agentName);
+        if (picked == null) {
             throw new AgentCardNotFoundException(agentName);
         }
-        for (Instance inst : instances) {
-            if (!inst.isHealthy() || inst.isIsolated()) {
-                continue;
-            }
-            Map<String, String> metadata = inst.getMetadata();
-            if (metadata == null) {
-                continue;
-            }
-            String json = metadata.get(PolarisA2aConstants.META_AGENT_CARD);
-            if (json == null || json.isBlank()) {
-                continue;
-            }
-            AgentCard card;
-            try {
-                card = AgentCardCodec.fromJson(json);
-            } catch (IllegalArgumentException e) {
-                log.warn("Skipping malformed agent card for '{}' from instance {}:{}",
-                        agentName, inst.getHost(), inst.getPort(), e);
-                continue;
-            }
-            if (card.name() != null && !agentName.equals(card.name())) {
-                log.warn("Skipping agent card named '{}' while resolving '{}' from instance {}:{}",
-                        card.name(), agentName, inst.getHost(), inst.getPort());
-                continue;
-            }
+        CacheEntry next = new CacheEntry(picked.card(), picked.instance().getHost(), picked.instance().getPort());
+        if (current != null) {
+            log.info("Agent '{}' instance {}:{} is unavailable; switching to {}:{}",
+                    agentName, current.host(), current.port(), next.host(), next.port());
+        } else {
             log.debug("Resolved agent '{}' card from instance {}:{}",
-                    agentName, inst.getHost(), inst.getPort());
-            return card;
+                    agentName, next.host(), next.port());
         }
-        throw new AgentCardNotFoundException(agentName);
+        cache.put(agentName, next);
+        return next.card();
     }
 
-    /** Drop the cached card so the next lookup re-fetches from polaris. */
+    private Instance[] loadHealthyInstances(String agentName) throws PolarisException {
+        GetHealthyInstancesRequest req = new GetHealthyInstancesRequest();
+        req.setNamespace(namespace);
+        req.setService(agentName);
+        InstancesResponse resp = consumerAPI.getHealthyInstances(req);
+        Instance[] instances = resp.getInstances();
+        return instances == null ? new Instance[0] : instances;
+    }
+
+    private static boolean stickyStillUsable(CacheEntry current, Instance[] instances, String agentName) {
+        for (Instance inst : instances) {
+            if (!current.host().equals(inst.getHost()) || current.port() != inst.getPort()) {
+                continue;
+            }
+            return decodeUsableCard(inst, agentName) != null;
+        }
+        return false;
+    }
+
+    private static DecodedInstance pickFirstUsable(Instance[] instances, String agentName) {
+        for (Instance inst : instances) {
+            AgentCard card = decodeUsableCard(inst, agentName);
+            if (card != null) {
+                return new DecodedInstance(inst, card);
+            }
+        }
+        return null;
+    }
+
+    private static AgentCard decodeUsableCard(Instance inst, String agentName) {
+        Map<String, String> metadata = inst.getMetadata();
+        if (metadata == null) {
+            return null;
+        }
+        String json = metadata.get(PolarisA2aConstants.META_AGENT_CARD);
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        AgentCard card;
+        try {
+            card = AgentCardCodec.fromJson(json);
+        } catch (IllegalArgumentException e) {
+            log.warn("Skipping malformed agent card for '{}' from instance {}:{}",
+                    agentName, inst.getHost(), inst.getPort(), e);
+            return null;
+        }
+        if (card.name() != null && !agentName.equals(card.name())) {
+            log.warn("Skipping agent card named '{}' while resolving '{}' from instance {}:{}",
+                    card.name(), agentName, inst.getHost(), inst.getPort());
+            return null;
+        }
+        return card;
+    }
+
+    /** Drop the cached card so the next lookup re-selects an instance. */
     public void invalidate(String agentName) {
         cache.remove(agentName);
     }
@@ -231,8 +218,8 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
     }
 
     /**
-     * Fluent factory. {@link #refreshIntervalMs(long)} defaults to
-     * {@link PolarisA2aConstants#DEFAULT_REFRESH_INTERVAL_MS}.
+     * Fluent factory. {@link #refreshIntervalMs(long)} is accepted for compatibility
+     * with existing configuration; stickiness does not use a TTL.
      */
     public static final class Builder {
 
@@ -244,7 +231,7 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
         }
 
         /**
-         * {@code >0} TTL millis, {@code 0} no cache, {@code <0} cache until invalidate.
+         * Accepted for compatibility; instance stickiness ignores this value.
          */
         public Builder refreshIntervalMs(long refreshIntervalMs) {
             this.refreshIntervalMs = refreshIntervalMs;
@@ -260,7 +247,10 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
         }
     }
 
-    /** Cached card plus wall-clock millis when it was stored. */
-    private record CacheEntry(AgentCard card, long fetchedAtMs) {
+    /** Sticky card bound to the Polaris instance that produced it. */
+    private record CacheEntry(AgentCard card, String host, int port) {
+    }
+
+    private record DecodedInstance(Instance instance, AgentCard card) {
     }
 }
