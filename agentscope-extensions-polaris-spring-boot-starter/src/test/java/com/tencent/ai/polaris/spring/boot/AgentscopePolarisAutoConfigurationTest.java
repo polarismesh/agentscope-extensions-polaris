@@ -185,8 +185,7 @@ class AgentscopePolarisAutoConfigurationTest {
                         "agentscope.polaris.namespace=prod",
                         "agentscope.polaris.token=secret",
                         "agentscope.polaris.a2a.enabled=true",
-                        "agentscope.polaris.a2a.registry.ttl=10",
-                        "agentscope.polaris.a2a.discovery.refresh-interval-ms=30000")
+                        "agentscope.polaris.a2a.registry.ttl=10")
                 .run(context -> {
                     AgentScopePolarisProperties polarisProps =
                             context.getBean(AgentScopePolarisProperties.class);
@@ -198,7 +197,7 @@ class AgentscopePolarisAutoConfigurationTest {
                             context.getBean(AgentScopeA2aPolarisProperties.class);
                     assertThat(a2aProps.isEnabled()).isTrue();
                     assertThat(a2aProps.getRegistry().getTtl()).isEqualTo(10);
-                    assertThat(a2aProps.getDiscovery().getRefreshIntervalMs()).isEqualTo(30000L);
+                    assertThat(a2aProps.getDiscovery().isEnabled()).isTrue();
                 });
     }
 

@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -85,7 +86,7 @@ class PolarisAgentCardResolverTest {
     }
 
     private PolarisAgentCardResolver resolver() {
-        return new PolarisAgentCardResolver(consumerAPI, NAMESPACE, 0, System::currentTimeMillis);
+        return new PolarisAgentCardResolver(consumerAPI, NAMESPACE);
     }
 
     @Test
@@ -118,8 +119,32 @@ class PolarisAgentCardResolverTest {
 
         assertEquals("http://10.0.0.1:8080/", firstCard.url());
         assertEquals("1.0.0", firstCard.version());
-        assertSame(firstCard, secondCard);
+        assertEquals("http://10.0.0.1:8080/", secondCard.url());
+        assertEquals("1.0.0", secondCard.version());
         verify(consumerAPI, times(2)).getHealthyInstances(any(GetHealthyInstancesRequest.class));
+    }
+
+    @Test
+    void getAgentCard_refreshesCardWhenStickyInstanceMetadataChanges() throws PolarisException {
+        String v1 = AgentCardCodec.toJson(buildCard("sticky", "1.0.0", "http://10.0.0.1:8080/"));
+        String v2 = AgentCardCodec.toJson(buildCard("sticky", "1.1.0", "http://10.0.0.1:8080/"));
+        String other = AgentCardCodec.toJson(buildCard("sticky", "9.0.0", "http://10.0.0.2:8080/"));
+        Instance firstV1 = buildInstance("10.0.0.1", 8080, Map.of("a2a.agent.card", v1));
+        Instance firstV2 = buildInstance("10.0.0.1", 8080, Map.of("a2a.agent.card", v2));
+        Instance second = buildInstance("10.0.0.2", 8080, Map.of("a2a.agent.card", other));
+        InstancesResponse initial = responseWith(firstV1, second);
+        InstancesResponse updated = responseWith(second, firstV2);
+        when(consumerAPI.getHealthyInstances(any(GetHealthyInstancesRequest.class)))
+                .thenReturn(initial, updated);
+
+        PolarisAgentCardResolver resolver = resolver();
+        AgentCard firstCard = resolver.getAgentCard("sticky");
+        AgentCard refreshed = resolver.getAgentCard("sticky");
+
+        assertEquals("1.0.0", firstCard.version());
+        assertEquals("1.1.0", refreshed.version());
+        assertEquals("http://10.0.0.1:8080/", refreshed.url());
+        assertNotSame(firstCard, refreshed);
     }
 
     @Test

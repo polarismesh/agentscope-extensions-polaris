@@ -36,6 +36,6 @@ public final class PolarisConstants {
     /** {@code agentscope.polaris.a2a.registry} — registry behavior (enabled, ttl). */
     public static final String A2A_POLARIS_REGISTRY_PREFIX = A2A_POLARIS_PREFIX + ".registry";
 
-    /** {@code agentscope.polaris.a2a.discovery} — discovery behavior (enabled, refresh-interval-ms). */
+    /** {@code agentscope.polaris.a2a.discovery} — discovery behavior ({@code enabled}). */
     public static final String A2A_POLARIS_DISCOVERY_PREFIX = A2A_POLARIS_PREFIX + ".discovery";
 }

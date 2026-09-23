@@ -73,7 +73,6 @@ public class AgentscopeA2aPolarisAutoConfiguration {
      * Resolves A2A agent cards from Polaris.
      *
      * @param context shared Polaris SDK context
-     * @param a2aProperties A2A registry/discovery settings
      * @return the Polaris-backed {@link AgentCardResolver}
      */
     @Bean
@@ -83,10 +82,7 @@ public class AgentscopeA2aPolarisAutoConfiguration {
             name = "enabled",
             havingValue = "true",
             matchIfMissing = true)
-    public AgentCardResolver polarisAgentCardResolver(
-            PolarisContextManager context, AgentScopeA2aPolarisProperties a2aProperties) {
-        return PolarisAgentCardResolver.builder(context)
-                .refreshIntervalMs(a2aProperties.getDiscovery().getRefreshIntervalMs())
-                .build();
+    public AgentCardResolver polarisAgentCardResolver(PolarisContextManager context) {
+        return PolarisAgentCardResolver.builder(context).build();
     }
 }

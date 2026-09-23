@@ -46,14 +46,6 @@ public final class PolarisA2aConstants {
     public static final int DEFAULT_TTL_SECONDS = 5;
 
     /**
-     * Default discovery cache TTL in milliseconds.
-     *
-     * <p>{@code >0} = TTL refresh; {@code 0} = no cache (fetch every call);
-     * {@code <0} = cache forever until invalidate.
-     */
-    public static final long DEFAULT_REFRESH_INTERVAL_MS = 30_000L;
-
-    /**
      * Maximum length of a single Polaris instance metadata value (characters).
      * Equal to 64KiB − 1.
      */

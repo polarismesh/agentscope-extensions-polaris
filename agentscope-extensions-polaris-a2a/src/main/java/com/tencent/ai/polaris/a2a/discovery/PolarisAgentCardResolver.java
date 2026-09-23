@@ -33,7 +33,6 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.LongSupplier;
 
 /**
  * AgentScope A2A card resolver backed by polaris-java.
@@ -45,13 +44,13 @@ import java.util.function.LongSupplier;
  * AgentCard JSON written at register time). Unhealthy and isolated instances are
  * already excluded by that API.
  *
- * <p>Instance stickiness: the first successful lookup picks one usable instance and
- * keeps that {@link AgentCard} (and its {@code url}) for later calls. On each later
- * lookup the healthy list is checked; if that instance is still present with a usable
- * card, the cached card is returned unchanged. If it has left the healthy set (or its
- * metadata is no longer usable), another instance is chosen, an info log is written,
- * and the new card is cached. Polaris SDK errors after a successful pick keep the
- * cached card (warn log).
+ * <p>Instance stickiness: the first successful lookup picks one usable instance
+ * ({@code host:port}) and later calls stay on that identity. Each later lookup still
+ * reads the healthy list: if the sticky instance is present with a usable card, the
+ * freshly decoded JSON is cached and returned (so in-place card updates on the same
+ * instance are visible). If it has left the healthy set (or its metadata is no longer
+ * usable), another instance is chosen, an info log is written, and the new identity is
+ * cached. Polaris SDK errors after a successful pick keep the cached card (warn log).
  *
  * <p>Candidates are skipped when they are missing {@code a2a.agent.card}, fail JSON
  * decode, or carry a card whose {@code name} does not match the requested agent.
@@ -75,28 +74,12 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
      * @param context shared SDK context (namespace + {@link ConsumerAPI})
      */
     public PolarisAgentCardResolver(PolarisContextManager context) {
-        this(context.consumerAPI(), context.getNamespace(),
-                PolarisA2aConstants.DEFAULT_REFRESH_INTERVAL_MS, System::currentTimeMillis);
+        this(context.consumerAPI(), context.getNamespace());
     }
 
     PolarisAgentCardResolver(ConsumerAPI consumerAPI, String namespace) {
-        this(consumerAPI, namespace, PolarisA2aConstants.DEFAULT_REFRESH_INTERVAL_MS, System::currentTimeMillis);
-    }
-
-    /**
-     * Package-visible constructor for tests that inject {@link ConsumerAPI}.
-     *
-     * @param refreshIntervalMs unused; retained so existing builder / test call sites compile
-     * @param currentTimeMillis unused; retained so existing test call sites compile
-     */
-    PolarisAgentCardResolver(
-            ConsumerAPI consumerAPI,
-            String namespace,
-            long refreshIntervalMs,
-            LongSupplier currentTimeMillis) {
         this.consumerAPI = Objects.requireNonNull(consumerAPI, "consumerAPI");
         this.namespace = Objects.requireNonNull(namespace, "namespace");
-        Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
     }
 
     /**
@@ -104,7 +87,7 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
      * until that instance is no longer healthy / usable.
      *
      * @param agentName Polaris service name / {@link AgentCard#name()}
-     * @return the sticky card, or a newly chosen card after failover
+     * @return the sticky instance's latest card, or a newly chosen card after failover
      * @throws AgentCardNotFoundException if no instance has a usable card
      * @throws IllegalStateException if the Polaris lookup itself fails and nothing is cached
      */
@@ -124,8 +107,11 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
             throw new IllegalStateException(
                     "Failed to discover agent '" + agentName + "' from polaris: " + e.getMessage(), e);
         }
-        if (current != null && stickyStillUsable(current, instances, agentName)) {
-            return current.card();
+        DecodedInstance sticky = current == null ? null : findStickyUsable(current, instances, agentName);
+        if (sticky != null) {
+            CacheEntry refreshed = new CacheEntry(sticky.card(), current.host(), current.port());
+            cache.put(agentName, refreshed);
+            return refreshed.card();
         }
         DecodedInstance picked = pickFirstUsable(instances, agentName);
         if (picked == null) {
@@ -152,14 +138,15 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
         return instances == null ? new Instance[0] : instances;
     }
 
-    private static boolean stickyStillUsable(CacheEntry current, Instance[] instances, String agentName) {
+    private static DecodedInstance findStickyUsable(CacheEntry current, Instance[] instances, String agentName) {
         for (Instance inst : instances) {
             if (!current.host().equals(inst.getHost()) || current.port() != inst.getPort()) {
                 continue;
             }
-            return decodeUsableCard(inst, agentName) != null;
+            AgentCard card = decodeUsableCard(inst, agentName);
+            return card == null ? null : new DecodedInstance(inst, card);
         }
-        return false;
+        return null;
     }
 
     private static DecodedInstance pickFirstUsable(Instance[] instances, String agentName) {
@@ -217,37 +204,21 @@ public class PolarisAgentCardResolver implements AgentCardResolver, AutoCloseabl
         return new Builder(context);
     }
 
-    /**
-     * Fluent factory. {@link #refreshIntervalMs(long)} is accepted for compatibility
-     * with existing configuration; stickiness does not use a TTL.
-     */
+    /** Fluent factory. */
     public static final class Builder {
 
         private final PolarisContextManager context;
-        private long refreshIntervalMs = PolarisA2aConstants.DEFAULT_REFRESH_INTERVAL_MS;
 
         private Builder(PolarisContextManager context) {
             this.context = Objects.requireNonNull(context, "context");
         }
 
-        /**
-         * Accepted for compatibility; instance stickiness ignores this value.
-         */
-        public Builder refreshIntervalMs(long refreshIntervalMs) {
-            this.refreshIntervalMs = refreshIntervalMs;
-            return this;
-        }
-
         public PolarisAgentCardResolver build() {
-            return new PolarisAgentCardResolver(
-                    context.consumerAPI(),
-                    context.getNamespace(),
-                    refreshIntervalMs,
-                    System::currentTimeMillis);
+            return new PolarisAgentCardResolver(context);
         }
     }
 
-    /** Sticky card bound to the Polaris instance that produced it. */
+    /** Sticky instance identity plus the last decoded card from that instance. */
     private record CacheEntry(AgentCard card, String host, int port) {
     }
 

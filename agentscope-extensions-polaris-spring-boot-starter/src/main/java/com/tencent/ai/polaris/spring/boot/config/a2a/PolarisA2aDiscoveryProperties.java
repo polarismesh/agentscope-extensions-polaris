@@ -24,29 +24,11 @@ public class PolarisA2aDiscoveryProperties {
     /** Whether to discover agents from Polaris. Default {@code true}. */
     private boolean enabled = true;
 
-    /**
-     * Cache refresh interval in milliseconds.
-     * <ul>
-     *   <li>{@code >0} (default {@code 30000}) — TTL; stale entries refresh on next lookup</li>
-     *   <li>{@code 0} — fetch every call (no cache)</li>
-     *   <li>{@code <0} — cache forever until invalidate</li>
-     * </ul>
-     */
-    private long refreshIntervalMs = 30_000L;
-
     public boolean isEnabled() {
         return enabled;
     }
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
-    }
-
-    public long getRefreshIntervalMs() {
-        return refreshIntervalMs;
-    }
-
-    public void setRefreshIntervalMs(long refreshIntervalMs) {
-        this.refreshIntervalMs = refreshIntervalMs;
     }
 }

@@ -60,4 +60,3 @@ agentscope:
         ttl: 5
       discovery:
         enabled: true
-        refresh-interval-ms: 30000
