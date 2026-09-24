@@ -5,15 +5,24 @@ server:
 spring:
   main:
     banner-mode: off
+  mvc:
+    async:
+      # A2A message/stream is a long-lived SSE request. Keep the Servlet async
+      # request alive while the model is reasoning or executing tools.
+      request-timeout: ${A2A_STREAM_TIMEOUT:10m}
 
 agentscope:
-  # Build the model via the agentscope-spring-boot-starter (OpenAI-compatible).
+  # Model options:
+  #   openai              OpenAI-compatible real model (configure agentscope.openai below)
+  #   skill-command-mock  offline /skill-list and /skill <name> support
+  #   echo-last-user-input  offline echo model
+
   model:
-    provider: openai
+    provider: ${A2A_MODEL_PROVIDER:openai}
   openai:
-    api-key: ${TOKEN_HUB_API_KEY}
+    api-key: ${TOKEN_HUB_API_KEY:}
     base-url: ${TOKEN_HUB_BASE_URL:https://api.openai.com/v1}
-    model-name: ${OPENAI_MODEL:deepseek-v4-flash}
+    model-name: ${OPENAI_MODEL:}
 
   # ReActAgent auto-built by the agentscope-spring-boot-starter
   agent:
@@ -50,9 +59,13 @@ agentscope:
             tags: [time]
   polaris:
     enabled: ${POLARIS_ENABLED:true}
-    address: ${POLARIS_ADDRESS:127.0.0.1:8091}
+    address: ${POLARIS_DISCOVERY_ADDRESS:127.0.0.1:8091}
     namespace: ${POLARIS_NAMESPACE:default}
     token: ${POLARIS_TOKEN:}
+    skill:
+      enabled: true
+      mounted:
+        enabled: true
     a2a:
       enabled: true
       registry:
