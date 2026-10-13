@@ -177,11 +177,38 @@ class AgentscopePolarisAutoConfigurationTest {
      * auto-config so no {@link PolarisContextManager} connection is attempted.
      */
     @Test
+    void shouldCopySkillAddressOntoSharedContext() {
+        AgentScopePolarisProperties[] seen = new AgentScopePolarisProperties[1];
+        try (MockedConstruction<PolarisContextManager> constructed = Mockito.mockConstruction(
+                PolarisContextManager.class,
+                (mock, construction) -> {
+                    seen[0] = (AgentScopePolarisProperties) construction.arguments().get(0);
+                    when(mock.getNamespace()).thenReturn("default");
+                })) {
+            runner.withPropertyValues(
+                            "agentscope.polaris.address=127.0.0.1:8091",
+                            "agentscope.polaris.skill.address=127.0.0.1:8094",
+                            "agentscope.polaris.a2a.enabled=false")
+                    .run(context -> assertThat(constructed.constructed()).hasSize(1));
+        }
+        assertThat(seen[0].getSkillAddress()).isEqualTo("127.0.0.1:8094");
+    }
+
+    @Test
+    void nestedContextConditionsCanBeConstructed() {
+        assertThat(new AgentscopePolarisAutoConfiguration.OnPolarisContextEnabled()).isNotNull();
+        assertThat(new AgentscopePolarisAutoConfiguration.OnPolarisContextEnabled.Enabled()).isNotNull();
+        assertThat(new AgentscopePolarisAutoConfiguration.OnPolarisContextEnabled.AddressPresent())
+                .isNotNull();
+    }
+
+    @Test
     void shouldBindPropertiesFromPrefix() {
         new ApplicationContextRunner()
                 .withUserConfiguration(PropertiesOnlyConfig.class)
                 .withPropertyValues(
                         "agentscope.polaris.address=10.0.0.1:8091",
+                        "agentscope.polaris.skill-address=10.0.0.1:8094",
                         "agentscope.polaris.namespace=prod",
                         "agentscope.polaris.token=secret",
                         "agentscope.polaris.a2a.enabled=true",
@@ -190,6 +217,7 @@ class AgentscopePolarisAutoConfigurationTest {
                     AgentScopePolarisProperties polarisProps =
                             context.getBean(AgentScopePolarisProperties.class);
                     assertThat(polarisProps.getAddress()).isEqualTo("10.0.0.1:8091");
+                    assertThat(polarisProps.getSkillAddress()).isEqualTo("10.0.0.1:8094");
                     assertThat(polarisProps.getNamespace()).isEqualTo("prod");
                     assertThat(polarisProps.getToken()).isEqualTo("secret");
 
