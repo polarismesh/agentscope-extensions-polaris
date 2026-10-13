@@ -18,6 +18,7 @@ package com.tencent.ai.polaris.skill;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -636,6 +637,64 @@ class PolarisSkillRepositoryTest {
         verify(skillAPI, times(1)).listSkills(any());
     }
 
+    @Test
+    void getSkillAcceptsZeroSuccessCodeAndNullVersion() throws Exception {
+        SkillDownloadResponse resp = new SkillDownloadResponse();
+        resp.setCode(0);
+        resp.setZipContent(skillZip("sql-analysis", "Analyze SQL", "Run EXPLAIN", null, (String) null));
+        when(skillAPI.downloadSkill(any())).thenReturn(resp);
+
+        AgentSkill skill = repository.loadSkill("sql-analysis", null);
+
+        assertEquals("sql-analysis", skill.getName());
+        ArgumentCaptor<SkillDownloadRequest> captor = ArgumentCaptor.forClass(SkillDownloadRequest.class);
+        verify(skillAPI).downloadSkill(captor.capture());
+        assertNull(captor.getValue().getVersion());
+    }
+
+    @Test
+    void getSkillReportsErrorCodeWithoutInfo() throws Exception {
+        SkillDownloadResponse resp = new SkillDownloadResponse();
+        resp.setCode(500);
+        when(skillAPI.downloadSkill(any())).thenReturn(resp);
+
+        RuntimeException e =
+                assertThrows(RuntimeException.class, () -> repository.getSkill("sql-analysis"));
+        assertEquals("Failed to load skill from Polaris: sql-analysis (code=500)", e.getMessage());
+    }
+
+    @Test
+    void getAllSkillNamesReportsListFailureWithoutInfo() throws Exception {
+        SkillListResponse failed = new SkillListResponse();
+        failed.setCode(500);
+        when(skillAPI.listSkills(any())).thenReturn(failed);
+
+        RuntimeException denied =
+                assertThrows(RuntimeException.class, () -> repository.getAllSkillNames());
+        assertEquals("Failed to list skills from Polaris: ", denied.getMessage());
+    }
+
+    @Test
+    void getSkillLeavesMalformedEntryNamesUnchanged() throws Exception {
+        SkillDownloadResponse emptyName = new SkillDownloadResponse();
+        emptyName.setCode(ServerCodes.EXECUTE_SUCCESS);
+        emptyName.setZipContent(namedEntryZip("", "x"));
+        when(skillAPI.downloadSkill(any())).thenReturn(emptyName);
+        assertThrows(RuntimeException.class, () -> repository.getSkill("sql-analysis"));
+
+        SkillDownloadResponse windows = new SkillDownloadResponse();
+        windows.setCode(ServerCodes.EXECUTE_SUCCESS);
+        windows.setZipContent(namedEntryZip("nested\\SKILL.md", "x"));
+        when(skillAPI.downloadSkill(any())).thenReturn(windows);
+        assertThrows(RuntimeException.class, () -> repository.getSkill("sql-analysis"));
+
+        SkillDownloadResponse directories = new SkillDownloadResponse();
+        directories.setCode(ServerCodes.EXECUTE_SUCCESS);
+        directories.setZipContent(directoryOnlyZip());
+        when(skillAPI.downloadSkill(any())).thenReturn(directories);
+        assertThrows(RuntimeException.class, () -> repository.getSkill("sql-analysis"));
+    }
+
     private static SkillResource listedSkill(String name, String activeVersion) {
         SkillResource resource = new SkillResource();
         resource.setName(name);
@@ -699,6 +758,15 @@ class PolarisSkillRepositoryTest {
             zout.closeEntry();
             zout.putNextEntry(new ZipEntry("SKILL.md"));
             zout.write(md.getBytes(StandardCharsets.UTF_8));
+            zout.closeEntry();
+        }
+        return bos.toByteArray();
+    }
+
+    private static byte[] directoryOnlyZip() throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zout = new ZipOutputStream(bos)) {
+            zout.putNextEntry(new ZipEntry("assets/"));
             zout.closeEntry();
         }
         return bos.toByteArray();
